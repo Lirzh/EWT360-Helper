@@ -1,610 +1,793 @@
 // ==UserScript==
 // @name         升学E网通助手（增强版）
 // @namespace    https://www.yuzu-soft.com/products.html
-// @version      1.0.1
-// @description  自动通过随机检查、自动播放下一视频、自动跳题，支持GitHub自动更新
+// @version      1.0.3
+// @description  自动通过随机检查、自动播放下一视频、自动跳题（仅作业页面生效），支持自动更新
+// @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @author       仅供学习交流，严禁用于商业用途，请于24小时内删除
-// @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html#/homework/*
-// @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @grant        GM_registerMenuCommand
-// @connect      raw.githubusercontent.com
+// @grant        GM_xmlhttpRequest
+// @grant        GM_info
+// 此脚本完全免费，倒卖的人绝对私募了XD
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // ===== 自动更新配置 =====
-    // 配置为指定的GitHub仓库地址
-    const UPDATE_CONFIG = {
-        // 使用raw地址以直接获取脚本内容
-        githubRawUrl: "https://raw.githubusercontent.com/Lirzh/EWT360-Helper/main/main.user.js",
-        checkInterval: 3600000, // 检查更新间隔 (1小时 = 3600000毫秒)
-        lastCheckTimeKey: "ewt360_last_check_time",
-        ignoreVersionKey: "ewt360_ignore_version"
-    };
-    
-    // 当前脚本版本 (与metadata中的@version保持一致)
-    const CURRENT_VERSION = "1.0.0";
-
-    // 统计变量
-    let stats = {
-        videoPlayCount: 0,        // 累计连播视频数
-        totalCheckCount: 0,       // 累计过检次数
-        skippedQuestionCount: 0,  // 累计跳题次数
-        startTime: new Date(),    // 脚本启动时间
-        runTime: '00:00:00'       // 累计运行时长
+    /**
+     * 更新配置模块 - 管理GitHub更新相关参数
+     */
+    const UpdateConfig = {
+        user: "Lirzh",                  // GitHub用户名
+        repo: "EWT360-Helper",          // 仓库名称
+        scriptPath: "main.user.js",     // 脚本路径
+        checkInterval: 600000,        // 自动检查间隔(毫秒) - 10分钟
+        lastCheckTimeKey: "ewtLastCheckTime" // 存储最后检查时间的键名
     };
 
-    // 开关状态变量
-    let isCheckEnabled = true;
-    let isRewatchEnabled = true;
-    let isSkipQuestionEnabled = true; // 自动跳题开关
-    let checkIntervalId = null;
-    let rewatchIntervalId = null;
-    let skipQuestionIntervalId = null; // 自动跳题定时器
-    let runTimeIntervalId = null;
-    let updateCheckIntervalId = null;
-    
-    // 配置参数
-    const config = {
-        checkInterval: 1000,      // 检查间隔(ms)
-        rewatchInterval: 2000,    // 连播检查间隔(ms)
-        skipQuestionInterval: 1500, // 自动跳题检查间隔(ms)
-        panelOpacity: 0.9,        // 面板透明度
-        panelHoverOpacity: 1.0    // 面板hover透明度
+    /**
+     * 配置模块 - 存储脚本所有可配置参数
+     */
+    const Config = {
+        // 功能检查间隔（毫秒）
+        checkInterval: 1000,      // 自动过检检查间隔
+        rewatchInterval: 2000,    // 视频连播检查间隔
+        skipQuestionInterval: 1500, // 自动跳题检查间隔
+        // 控制面板样式
+        panelOpacity: 0.9,        // 常态透明度
+        panelHoverOpacity: 1.0,   // hover时透明度
+        // 目标路径匹配规则
+        targetHashPath: '#/homework/' // 作业页面哈希路径前缀
     };
 
-    // ===== 自动更新功能实现 =====
-    // 解析版本号以便比较
-    function parseVersion(versionString) {
-        return versionString.split('.').map(Number);
-    }
+    /**
+     * 统计模块 - 管理脚本运行数据
+     */
+    const Stats = {
+        data: {
+            videoPlayCount: 0,       // 累计连播视频数
+            totalCheckCount: 0,      // 累计过检次数
+            skippedQuestionCount: 0, // 累计跳题次数
+            startTime: new Date(),   // 脚本启动时间
+            runTime: '00:00:00'      // 累计运行时长
+        },
 
-    // 比较版本号 (如果version1 > version2返回1, 相等返回0, 否则返回-1)
-    function compareVersions(version1, version2) {
-        const v1 = parseVersion(version1);
-        const v2 = parseVersion(version2);
-        
-        for (let i = 0; i < Math.max(v1.length, v2.length); i++) {
-            const num1 = v1[i] || 0;
-            const num2 = v2[i] || 0;
-            
-            if (num1 > num2) return 1;
-            if (num1 < num2) return -1;
-        }
-        return 0;
-    }
+        /**
+         * 更新统计数据显示
+         */
+        updateDisplay() {
+            document.getElementById('videoCount').textContent = this.data.videoPlayCount;
+            document.getElementById('totalCheckCount').textContent = this.data.totalCheckCount;
+            document.getElementById('skippedQuestionCount').textContent = this.data.skippedQuestionCount;
+            document.getElementById('runTime').textContent = this.data.runTime;
+        },
 
-    // 从GitHub获取最新版本信息
-    function getLatestVersionInfo(callback) {
-        GM_xmlhttpRequest({
-            method: "GET",
-            url: UPDATE_CONFIG.githubRawUrl,
-            onload: function(response) {
-                try {
-                    // 从用户脚本的metadata中提取版本号
-                    const versionMatch = response.responseText.match(/@version\s+(\d+\.\d+\.\d+)/);
-                    if (versionMatch && versionMatch[1]) {
-                        callback(null, {
-                            version: versionMatch[1],
-                            scriptContent: response.responseText
-                        });
-                    } else {
-                        callback(new Error("无法解析远程版本号"), null);
-                    }
-                } catch (e) {
-                    callback(e, null);
-                }
-            },
-            onerror: function(error) {
-                callback(new Error("获取远程版本失败: " + error.statusText), null);
-            },
-            ontimeout: function() {
-                callback(new Error("获取远程版本超时"), null);
-            }
-        });
-    }
-
-    // 检查更新
-    function checkForUpdates(showNoUpdateMsg = false) {
-        getLatestVersionInfo((error, info) => {
+        /**
+         * 更新运行时长
+         */
+        updateRunTime() {
             const now = new Date();
-            GM_setValue(UPDATE_CONFIG.lastCheckTimeKey, now.getTime());
-            
-            if (error) {
-                console.error("更新检查失败:", error.message);
-                if (showNoUpdateMsg) {
-                    alert("更新检查失败: " + error.message);
+            const durationMs = now - this.data.startTime;
+            const hours = Math.floor(durationMs / 3600000).toString().padStart(2, '0');
+            const minutes = Math.floor((durationMs % 3600000) / 60000).toString().padStart(2, '0');
+            const seconds = Math.floor((durationMs % 60000) / 1000).toString().padStart(2, '0');
+            this.data.runTime = `${hours}:${minutes}:${seconds}`;
+            this.updateDisplay();
+        },
+
+        /**
+         * 重置统计数据
+         */
+        reset() {
+            this.data.videoPlayCount = 0;
+            this.data.totalCheckCount = 0;
+            this.data.skippedQuestionCount = 0;
+            this.data.startTime = new Date();
+            this.updateDisplay();
+        }
+    };
+
+    /**
+     * UI模块 - 管理控制面板
+     */
+    const UI = {
+        panel: null,
+
+        /**
+         * 创建控制面板
+         */
+        createControlPanel() {
+            const panel = document.createElement('div');
+            panel.id = 'ewt-helper-panel';
+            panel.style.position = 'fixed';
+            panel.style.top = '0';
+            panel.style.left = '50%';
+            panel.style.transform = 'translateX(-50%)';
+            panel.style.zIndex = '9999';
+            panel.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+            panel.style.padding = '8px 15px';
+            panel.style.color = 'white';
+            panel.style.fontSize = '12px';
+            panel.style.display = 'inline-flex';
+            panel.style.alignItems = 'center';
+            panel.style.gap = '15px';
+            panel.style.borderRadius = '0 0 8px 8px';
+            panel.style.whiteSpace = 'nowrap';
+            panel.style.transition = 'all 0.3s ease';
+            panel.style.opacity = Config.panelOpacity;
+
+            // 鼠标悬停效果
+            panel.addEventListener('mouseenter', () => {
+                panel.style.opacity = Config.panelHoverOpacity;
+            });
+            panel.addEventListener('mouseleave', () => {
+                panel.style.opacity = Config.panelOpacity;
+            });
+
+            // 添加统计信息区和按钮区
+            panel.appendChild(this.createStatsArea());
+            panel.appendChild(this.createButtonArea());
+
+            this.panel = panel;
+            document.body.appendChild(panel);
+        },
+
+        /**
+         * 创建统计信息区域
+         */
+        createStatsArea() {
+            const statsDiv = document.createElement('div');
+            statsDiv.style.display = 'flex';
+            statsDiv.style.alignItems = 'center';
+            statsDiv.style.gap = '15px';
+            statsDiv.innerHTML = `
+                <div>累计连播: <span id="videoCount" style="color:#4CAF50">0</span></div>
+                <div>累计过检: <span id="totalCheckCount" style="color:#2196F3">0</span></div>
+                <div>累计跳题: <span id="skippedQuestionCount" style="color:#9C27B0">0</span></div>
+                <div>时长: <span id="runTime">00:00:00</span></div>
+            `;
+            return statsDiv;
+        },
+
+        /**
+         * 创建功能按钮区域
+         */
+        createButtonArea() {
+            const buttonsDiv = document.createElement('div');
+            buttonsDiv.style.display = 'flex';
+            buttonsDiv.style.alignItems = 'center';
+            buttonsDiv.style.gap = '8px';
+
+            // 添加功能按钮
+            buttonsDiv.appendChild(this.createFunctionButton(
+                '过检',
+                (isEnabled) => AutoCheck.toggle(isEnabled)
+            ));
+            buttonsDiv.appendChild(this.createFunctionButton(
+                '连播',
+                (isEnabled) => AutoPlay.toggle(isEnabled)
+            ));
+            buttonsDiv.appendChild(this.createFunctionButton(
+                '跳题',
+                (isEnabled) => AutoSkip.toggle(isEnabled)
+            ));
+            buttonsDiv.appendChild(this.createResetButton());
+            buttonsDiv.appendChild(this.createUpdateButton()); // 添加更新检查按钮
+
+            return buttonsDiv;
+        },
+
+        /**
+         * 创建功能开关按钮
+         */
+        createFunctionButton(name, toggleCallback) {
+            const button = document.createElement('button');
+            let isEnabled = true;
+
+            const updateButton = () => {
+                button.textContent = `${name}: ${isEnabled ? '开' : '关'}`;
+                button.style.backgroundColor = isEnabled ? '#4CAF50' : '#f44336';
+            };
+            updateButton();
+
+            // 按钮样式
+            button.style.padding = '3px 8px';
+            button.style.color = 'white';
+            button.style.border = 'none';
+            button.style.borderRadius = '12px';
+            button.style.cursor = 'pointer';
+            button.style.fontSize = '12px';
+            button.style.transition = 'background-color 0.2s';
+
+            // 点击事件
+            button.addEventListener('click', () => {
+                isEnabled = !isEnabled;
+                updateButton();
+                toggleCallback(isEnabled);
+            });
+
+            return button;
+        },
+
+        /**
+         * 创建统计重置按钮
+         */
+        createResetButton() {
+            const button = document.createElement('button');
+            button.textContent = '重置统计';
+            button.style.padding = '3px 8px';
+            button.style.backgroundColor = '#555';
+            button.style.color = 'white';
+            button.style.border = 'none';
+            button.style.borderRadius = '12px';
+            button.style.cursor = 'pointer';
+            button.style.fontSize = '12px';
+            button.style.transition = 'background-color 0.2s';
+
+            button.addEventListener('mouseover', () => {
+                button.style.backgroundColor = '#777';
+            });
+            button.addEventListener('mouseout', () => {
+                button.style.backgroundColor = '#555';
+            });
+
+            button.addEventListener('click', () => {
+                if (confirm('确定要重置统计数据吗？')) {
+                    Stats.reset();
                 }
-                return;
-            }
+            });
 
-            const ignoredVersion = GM_getValue(UPDATE_CONFIG.ignoreVersionKey, "");
-            // 如果是忽略的版本，不提示更新
-            if (ignoredVersion === info.version) {
-                return;
-            }
+            return button;
+        },
 
-            // 比较版本
-            const comparison = compareVersions(info.version, CURRENT_VERSION);
-            if (comparison > 0) {
-                // 发现新版本
-                const updateConfirm = confirm(
-                    `发现新版本 ${info.version} (当前版本 ${CURRENT_VERSION})\n` +
-                    "是否立即更新？"
-                );
-                
-                if (updateConfirm) {
-                    // 安装更新
-                    installUpdate(info.scriptContent);
-                } else {
-                    // 询问是否忽略此版本
-                    const ignoreVersion = confirm("是否忽略此版本？");
-                    if (ignoreVersion) {
-                        GM_setValue(UPDATE_CONFIG.ignoreVersionKey, info.version);
+        /**
+         * 创建检查更新按钮
+         */
+        createUpdateButton() {
+            const button = document.createElement('button');
+            button.textContent = '检查更新';
+            button.style.padding = '3px 8px';
+            button.style.backgroundColor = '#2196F3';
+            button.style.color = 'white';
+            button.style.border = 'none';
+            button.style.borderRadius = '12px';
+            button.style.cursor = 'pointer';
+            button.style.fontSize = '12px';
+            button.style.transition = 'background-color 0.2s';
+
+            button.addEventListener('mouseover', () => {
+                button.style.backgroundColor = '#0b7dda';
+            });
+            button.addEventListener('mouseout', () => {
+                button.style.backgroundColor = '#2196F3';
+            });
+
+            // 点击触发手动检查更新
+            button.addEventListener('click', () => {
+                UpdateChecker.checkForUpdates(true);
+            });
+
+            return button;
+        },
+
+        /**
+         * 移除控制面板
+         */
+        removePanel() {
+            if (this.panel) {
+                this.panel.remove();
+                this.panel = null;
+            }
+        }
+    };
+
+    /**
+     * 自动过检模块
+     */
+    const AutoCheck = {
+        intervalId: null,
+
+        /**
+         * 切换功能开关
+         */
+        toggle(isEnabled) {
+            if (isEnabled) {
+                this.start();
+            } else {
+                this.stop();
+            }
+        },
+
+        /**
+         * 启动自动过检
+         */
+        start() {
+            if (this.intervalId) return;
+
+            this.intervalId = setInterval(() => {
+                this.checkAndClick();
+            }, Config.checkInterval);
+        },
+
+        /**
+         * 停止自动过检
+         */
+        stop() {
+            if (this.intervalId) {
+                clearInterval(this.intervalId);
+                this.intervalId = null;
+            }
+        },
+
+        /**
+         * 检查并点击过检按钮
+         */
+        checkAndClick() {
+            try {
+                const buttons = document.querySelectorAll('span.btn-3LStS');
+                buttons.forEach(button => {
+                    if (button.textContent.trim() === '点击通过检查') {
+                        const clickEvent = new MouseEvent('click', {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window
+                        });
+                        button.dispatchEvent(clickEvent);
+
+                        Stats.data.totalCheckCount++;
+                        Stats.updateDisplay();
+                        Utils.playSound('check');
                     }
+                });
+            } catch (error) {
+                console.error('自动过检功能出错:', error);
+            }
+        }
+    };
+
+    /**
+     * 自动连播模块
+     */
+    const AutoPlay = {
+        intervalId: null,
+
+        /**
+         * 切换功能开关
+         */
+        toggle(isEnabled) {
+            if (isEnabled) {
+                this.start();
+            } else {
+                this.stop();
+            }
+        },
+
+        /**
+         * 启动自动连播
+         */
+        start() {
+            if (this.intervalId) return;
+
+            this.intervalId = setInterval(() => {
+                this.checkAndSwitch();
+            }, Config.rewatchInterval);
+        },
+
+        /**
+         * 停止自动连播
+         */
+        stop() {
+            if (this.intervalId) {
+                clearInterval(this.intervalId);
+                this.intervalId = null;
+            }
+        },
+
+        /**
+         * 检查视频进度并切换到下一视频
+         */
+        checkAndSwitch() {
+            try {
+                const progressBar = document.querySelector('.video-progress-bar');
+                if (progressBar) {
+                    const progress = parseFloat(progressBar.style.width) || 0;
+                    if (progress < 95) return;
                 }
-            } else if (showNoUpdateMsg) {
-                alert(`当前已是最新版本 (${CURRENT_VERSION})`);
+
+                const rewatchElement = document.querySelector('.progress-action-ghost-1cxSL');
+                const videoListContainer = document.querySelector('.listCon-N9Rlm');
+                if (!rewatchElement || !videoListContainer) return;
+
+                const activeVideo = videoListContainer.querySelector('.item-IPNWw.active-1MWMf');
+                if (!activeVideo) return;
+
+                let nextVideo = activeVideo.nextElementSibling;
+                while (nextVideo) {
+                    if (nextVideo.classList.contains('item-IPNWw')) {
+                        const clickEvent = new MouseEvent('click', {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window
+                        });
+                        nextVideo.dispatchEvent(clickEvent);
+
+                        Stats.data.videoPlayCount++;
+                        Stats.updateDisplay();
+                        Utils.playSound('next');
+                        return;
+                    }
+                    nextVideo = nextVideo.nextElementSibling;
+                }
+            } catch (error) {
+                console.error('自动连播功能出错:', error);
             }
-        });
-    }
-
-    // 安装更新
-    function installUpdate(scriptContent) {
-        try {
-            // 创建一个新的script标签来执行更新
-            const script = document.createElement('script');
-            script.textContent = scriptContent;
-            document.head.appendChild(script);
-            
-            // 移除旧的面板
-            const oldPanel = document.getElementById('ewt-helper-panel');
-            if (oldPanel) oldPanel.remove();
-            
-            alert("更新成功！脚本已重新加载。");
-        } catch (e) {
-            console.error("更新安装失败:", e);
-            alert("更新安装失败: " + e.message + "\n请手动更新。");
         }
-    }
+    };
 
-    // 注册定期检查更新
-    function setupAutoUpdateCheck() {
-        // 检查上次检查时间，如果超过间隔则检查
-        const lastCheckTime = GM_getValue(UPDATE_CONFIG.lastCheckTimeKey, 0);
-        const now = new Date().getTime();
-        
-        // 如果超过检查间隔，立即检查一次
-        if (now - lastCheckTime > UPDATE_CONFIG.checkInterval) {
-            checkForUpdates(false);
-        }
-        
-        // 设置定期检查
-        updateCheckIntervalId = setInterval(() => {
-            checkForUpdates(false);
-        }, UPDATE_CONFIG.checkInterval);
-        
-        // 添加菜单命令手动检查更新
-        GM_registerMenuCommand("检查脚本更新", () => checkForUpdates(true));
-    }
+    /**
+     * 自动跳题模块
+     */
+    const AutoSkip = {
+        intervalId: null,
 
-    // ===== 原有功能实现 =====
-    // 创建固定控制面板
-    function createControlPanel() {
-        const panel = document.createElement('div');
-        panel.id = 'ewt-helper-panel';
-        panel.style.position = 'fixed';
-        panel.style.top = '0';
-        panel.style.left = '50%';
-        panel.style.transform = 'translateX(-50%)'; // 保持居中且固定
-        panel.style.zIndex = '9999';
-        panel.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-        panel.style.padding = '8px 15px';
-        panel.style.color = 'white';
-        panel.style.fontSize = '12px';
-        panel.style.display = 'inline-flex';
-        panel.style.alignItems = 'center';
-        panel.style.gap = '15px';
-        panel.style.borderRadius = '0 0 8px 8px';
-        panel.style.whiteSpace = 'nowrap';
-        panel.style.transition = 'all 0.3s ease';
-        panel.style.opacity = config.panelOpacity;
-        
-        // 鼠标悬停效果
-        panel.addEventListener('mouseenter', () => {
-            panel.style.opacity = config.panelHoverOpacity;
-        });
-        
-        panel.addEventListener('mouseleave', () => {
-            panel.style.opacity = config.panelOpacity;
-        });
-
-        // 统计信息区
-        const statsDiv = document.createElement('div');
-        statsDiv.style.display = 'flex';
-        statsDiv.style.alignItems = 'center';
-        statsDiv.style.gap = '15px';
-        statsDiv.innerHTML = `
-            <div>累计连播: <span id="videoCount" style="color:#4CAF50">0</span></div>
-            <div>累计过检: <span id="totalCheckCount" style="color:#2196F3">0</span></div>
-            <div>累计跳题: <span id="skippedQuestionCount" style="color:#9C27B0">0</span></div>
-            <div>时长: <span id="runTime">00:00:00</span></div>
-        `;
-        panel.appendChild(statsDiv);
-
-        // 按钮区
-        const buttonsDiv = document.createElement('div');
-        buttonsDiv.style.display = 'flex';
-        buttonsDiv.style.alignItems = 'center';
-        buttonsDiv.style.gap = '8px';
-
-        const checkButton = document.createElement('button');
-        checkButton.textContent = `过检: ${isCheckEnabled ? '开' : '关'}`;
-        checkButton.style.padding = '3px 8px';
-        checkButton.style.backgroundColor = isCheckEnabled ? '#4CAF50' : '#f44336';
-        checkButton.style.color = 'white';
-        checkButton.style.border = 'none';
-        checkButton.style.borderRadius = '12px';
-        checkButton.style.cursor = 'pointer';
-        checkButton.style.fontSize = '12px';
-        checkButton.style.transition = 'background-color 0.2s';
-
-        const rewatchButton = document.createElement('button');
-        rewatchButton.textContent = `连播: ${isRewatchEnabled ? '开' : '关'}`;
-        rewatchButton.style.padding = '3px 8px';
-        rewatchButton.style.backgroundColor = isRewatchEnabled ? '#4CAF50' : '#f44336';
-        rewatchButton.style.color = 'white';
-        rewatchButton.style.border = 'none';
-        rewatchButton.style.borderRadius = '12px';
-        rewatchButton.style.cursor = 'pointer';
-        rewatchButton.style.fontSize = '12px';
-        rewatchButton.style.transition = 'background-color 0.2s';
-        
-        // 跳题按钮
-        const skipButton = document.createElement('button');
-        skipButton.textContent = `跳题: ${isSkipQuestionEnabled ? '开' : '关'}`;
-        skipButton.style.padding = '3px 8px';
-        skipButton.style.backgroundColor = isSkipQuestionEnabled ? '#4CAF50' : '#f44336';
-        skipButton.style.color = 'white';
-        skipButton.style.border = 'none';
-        skipButton.style.borderRadius = '12px';
-        skipButton.style.cursor = 'pointer';
-        skipButton.style.fontSize = '12px';
-        skipButton.style.transition = 'background-color 0.2s';
-        
-        // 重置按钮
-        const resetButton = document.createElement('button');
-        resetButton.textContent = '重置统计';
-        resetButton.style.padding = '3px 8px';
-        resetButton.style.backgroundColor = '#555';
-        resetButton.style.color = 'white';
-        resetButton.style.border = 'none';
-        resetButton.style.borderRadius = '12px';
-        resetButton.style.cursor = 'pointer';
-        resetButton.style.fontSize = '12px';
-        resetButton.style.transition = 'background-color 0.2s';
-        
-        // 更新检查按钮
-        const updateButton = document.createElement('button');
-        updateButton.textContent = '检查更新';
-        updateButton.style.padding = '3px 8px';
-        updateButton.style.backgroundColor = '#2196F3';
-        updateButton.style.color = 'white';
-        updateButton.style.border = 'none';
-        updateButton.style.borderRadius = '12px';
-        updateButton.style.cursor = 'pointer';
-        updateButton.style.fontSize = '12px';
-        updateButton.style.transition = 'background-color 0.2s';
-        
-        resetButton.addEventListener('mouseover', () => {
-            resetButton.style.backgroundColor = '#777';
-        });
-        
-        resetButton.addEventListener('mouseout', () => {
-            resetButton.style.backgroundColor = '#555';
-        });
-        
-        updateButton.addEventListener('mouseover', () => {
-            updateButton.style.backgroundColor = '#0b7dda';
-        });
-        
-        updateButton.addEventListener('mouseout', () => {
-            updateButton.style.backgroundColor = '#2196F3';
-        });
-
-        // 按钮事件
-        checkButton.addEventListener('click', () => {
-            isCheckEnabled = !isCheckEnabled;
-            checkButton.textContent = `过检: ${isCheckEnabled ? '开' : '关'}`;
-            checkButton.style.backgroundColor = isCheckEnabled ? '#4CAF50' : '#f44336';
-            toggleCheckInterval();
-        });
-
-        rewatchButton.addEventListener('click', () => {
-            isRewatchEnabled = !isRewatchEnabled;
-            rewatchButton.textContent = `连播: ${isRewatchEnabled ? '开' : '关'}`;
-            rewatchButton.style.backgroundColor = isRewatchEnabled ? '#4CAF50' : '#f44336';
-            toggleRewatchInterval();
-        });
-        
-        // 跳题按钮事件
-        skipButton.addEventListener('click', () => {
-            isSkipQuestionEnabled = !isSkipQuestionEnabled;
-            skipButton.textContent = `跳题: ${isSkipQuestionEnabled ? '开' : '关'}`;
-            skipButton.style.backgroundColor = isSkipQuestionEnabled ? '#4CAF50' : '#f44336';
-            toggleSkipQuestionInterval();
-        });
-        
-        resetButton.addEventListener('click', () => {
-            if (confirm('确定要重置统计数据吗？')) {
-                stats.videoPlayCount = 0;
-                stats.totalCheckCount = 0;
-                stats.skippedQuestionCount = 0;
-                stats.startTime = new Date();
-                updateStatsDisplay();
+        /**
+         * 切换功能开关
+         */
+        toggle(isEnabled) {
+            if (isEnabled) {
+                this.start();
+            } else {
+                this.stop();
             }
-        });
-        
-        // 检查更新按钮事件
-        updateButton.addEventListener('click', () => {
-            checkForUpdates(true);
-        });
+        },
 
-        buttonsDiv.appendChild(checkButton);
-        buttonsDiv.appendChild(rewatchButton);
-        buttonsDiv.appendChild(skipButton);
-        buttonsDiv.appendChild(resetButton);
-        buttonsDiv.appendChild(updateButton);
-        panel.appendChild(buttonsDiv);
+        /**
+         * 启动自动跳题
+         */
+        start() {
+            if (this.intervalId) return;
 
-        document.body.appendChild(panel);
-    }
+            this.intervalId = setInterval(() => {
+                this.checkAndSkip();
+            }, Config.skipQuestionInterval);
+        },
 
-    // 更新统计显示
-    function updateStatsDisplay() {
-        document.getElementById('videoCount').textContent = stats.videoPlayCount;
-        document.getElementById('totalCheckCount').textContent = stats.totalCheckCount;
-        document.getElementById('skippedQuestionCount').textContent = stats.skippedQuestionCount;
-        document.getElementById('runTime').textContent = stats.runTime;
-    }
+        /**
+         * 停止自动跳题
+         */
+        stop() {
+            if (this.intervalId) {
+                clearInterval(this.intervalId);
+                this.intervalId = null;
+            }
+        },
 
-    // 更新运行时长
-    function updateRunTime() {
-        const now = new Date();
-        const durationMs = now - stats.startTime;
-        const hours = Math.floor(durationMs / 3600000).toString().padStart(2, '0');
-        const minutes = Math.floor((durationMs % 3600000) / 60000).toString().padStart(2, '0');
-        const seconds = Math.floor((durationMs % 60000) / 1000).toString().padStart(2, '0');
-        stats.runTime = `${hours}:${minutes}:${seconds}`;
-        updateStatsDisplay();
-    }
+        /**
+         * 检查并点击跳题按钮
+         */
+        checkAndSkip() {
+            try {
+                const skipTexts = ['跳过', '跳题', '跳过题目', '暂不回答', '以后再说', '跳过本题'];
+                let targetButton = null;
 
-    // 自动过检控制
-    function toggleCheckInterval() {
-        if (isCheckEnabled && !checkIntervalId) {
-            checkIntervalId = setInterval(clickSpecificSpan, config.checkInterval);
-        } else if (!isCheckEnabled && checkIntervalId) {
-            clearInterval(checkIntervalId);
-            checkIntervalId = null;
-        }
-    }
+                skipTexts.some(text => {
+                    const buttons = document.querySelectorAll('button, a, span.btn, div.btn');
+                    for (const btn of buttons) {
+                        if (btn.textContent.trim() === text) {
+                            targetButton = btn;
+                            return true;
+                        }
+                    }
 
-    // 自动连播控制
-    function toggleRewatchInterval() {
-        if (isRewatchEnabled && !rewatchIntervalId) {
-            rewatchIntervalId = setInterval(handleRewatchElement, config.rewatchInterval);
-        } else if (!isRewatchEnabled && rewatchIntervalId) {
-            clearInterval(rewatchIntervalId);
-            rewatchIntervalId = null;
-        }
-    }
-    
-    // 自动跳题控制
-    function toggleSkipQuestionInterval() {
-        if (isSkipQuestionEnabled && !skipQuestionIntervalId) {
-            skipQuestionIntervalId = setInterval(handleSkipQuestions, config.skipQuestionInterval);
-        } else if (!isSkipQuestionEnabled && skipQuestionIntervalId) {
-            clearInterval(skipQuestionIntervalId);
-            skipQuestionIntervalId = null;
-        }
-    }
+                    if (!targetButton) {
+                        const xpathResult = document.evaluate(
+                            `//*[text()="${text}"]`,
+                            document,
+                            null,
+                            XPathResult.FIRST_ORDERED_NODE_TYPE,
+                            null
+                        );
+                        const element = xpathResult.singleNodeValue;
+                        if (element) {
+                            targetButton = element;
+                            return true;
+                        }
+                    }
+                    return false;
+                });
 
-    // 点击过检按钮
-    function clickSpecificSpan() {
-        try {
-            const spans = document.querySelectorAll('span.btn-3LStS');
-            spans.forEach(span => {
-                if (span.textContent.trim() === '点击通过检查') {
-                    // 模拟真实点击
+                if (targetButton && !targetButton.dataset.skipClicked) {
+                    targetButton.dataset.skipClicked = 'true';
+
                     const clickEvent = new MouseEvent('click', {
                         bubbles: true,
                         cancelable: true,
                         view: window
                     });
-                    span.dispatchEvent(clickEvent);
-                    
-                    stats.totalCheckCount++;
-                    updateStatsDisplay();
-                    
-                    // 播放提示音
-                    playNotificationSound('check');
+                    targetButton.dispatchEvent(clickEvent);
+
+                    Stats.data.skippedQuestionCount++;
+                    Stats.updateDisplay();
+                    Utils.playSound('skip');
+
+                    setTimeout(() => {
+                        delete targetButton.dataset.skipClicked;
+                    }, 5000);
+                }
+            } catch (error) {
+                console.error('自动跳题功能出错:', error);
+            }
+        }
+    };
+
+    /**
+     * 工具模块
+     */
+    const Utils = {
+        /**
+         * 播放操作提示音
+         */
+        playSound(type) {
+            try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                oscillator.type = 'sine';
+                switch (type) {
+                    case 'check':
+                        oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
+                        break;
+                    case 'next':
+                        oscillator.frequency.setValueAtTime(660, audioContext.currentTime);
+                        break;
+                    case 'skip':
+                        oscillator.frequency.setValueAtTime(1046, audioContext.currentTime);
+                        break;
+                    default:
+                        oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
+                }
+                gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+
+                oscillator.start();
+                oscillator.stop(audioContext.currentTime + 0.15);
+            } catch (error) {
+                console.warn('提示音播放失败:', error);
+            }
+        },
+
+        /**
+         * 检查当前路径是否为作业页面
+         */
+        isHomeworkPath() {
+            return window.location.hash.startsWith(Config.targetHashPath);
+        }
+    };
+
+    /**
+     * 更新检查模块
+     */
+    const UpdateChecker = {
+        updateCheckIntervalId: null,
+
+        /**
+         * 检查更新
+         * @param {boolean} manualCheck - 是否为手动检查
+         */
+        checkForUpdates(manualCheck = false) {
+            // 检查冷却时间（非手动检查时）
+            const lastCheckTime = GM_getValue(UpdateConfig.lastCheckTimeKey, 0);
+            const now = Date.now();
+
+            if (!manualCheck && now - lastCheckTime < UpdateConfig.checkInterval) {
+                return;
+            }
+
+            // 更新最后检查时间
+            GM_setValue(UpdateConfig.lastCheckTimeKey, now);
+
+            // 构建远程脚本URL
+            const rawUrl = `https://raw.githubusercontent.com/${UpdateConfig.user}/${UpdateConfig.repo}/main/${UpdateConfig.scriptPath}`;
+
+            // 获取本地版本
+            const localVersion = GM_info.script.version;
+
+            // 发送请求获取远程脚本
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: rawUrl,
+                onload: function(response) {
+                    if (response.status !== 200) {
+                        if (manualCheck) alert("检查更新失败，无法连接到服务器");
+                        return;
+                    }
+
+                    // 提取远程版本号
+                    const remoteVersionMatch = response.responseText.match(/@version\s+(\d+\.\d+\.\d+)/);
+                    if (!remoteVersionMatch) {
+                        if (manualCheck) alert("无法获取远程版本信息");
+                        return;
+                    }
+
+                    const remoteVersion = remoteVersionMatch[1];
+
+                    // 比较版本
+                    if (UpdateChecker.isNewVersion(remoteVersion, localVersion)) {
+                        if (confirm(`发现新版本 ${remoteVersion}，当前版本 ${localVersion}，是否更新？`)) {
+                            UpdateChecker.installUpdate(response.responseText);
+                        }
+                    } else if (manualCheck) {
+                        alert(`当前已是最新版本 (${localVersion})`);
+                    }
+                },
+                onerror: function() {
+                    if (manualCheck) alert("检查更新时发生错误");
                 }
             });
-        } catch (e) {
-            console.error('过检功能出错:', e);
-        }
-    }
+        },
 
-    // 处理自动连播
-    function handleRewatchElement() {
-        try {
-            // 检查视频是否已播放完成（通过进度条判断）
-            const progressBar = document.querySelector('.video-progress-bar');
-            if (progressBar) {
-                const progress = parseFloat(progressBar.style.width) || 0;
-                // 当视频播放完成度超过95%时才尝试切换
-                if (progress < 95) return;
+        /**
+         * 版本比较
+         * @param {string} remote - 远程版本
+         * @param {string} local - 本地版本
+         * @returns {boolean} 是否有新版本
+         */
+        isNewVersion(remote, local) {
+            const remoteParts = remote.split('.').map(Number);
+            const localParts = local.split('.').map(Number);
+
+            for (let i = 0; i < remoteParts.length; i++) {
+                if (remoteParts[i] > (localParts[i] || 0)) return true;
+                if (remoteParts[i] < (localParts[i] || 0)) return false;
             }
-            
-            const rewatchElement = document.querySelector('.progress-action-ghost-1cxSL');
-            if (!rewatchElement) return;
+            return false;
+        },
 
-            const itemContainer = document.querySelector('.listCon-N9Rlm');
-            if (!itemContainer) return;
+        /**
+         * 安装更新
+         * @param {string} scriptContent - 新脚本内容
+         */
+        installUpdate(scriptContent) {
+            try {
+                // 创建脚本标签执行更新逻辑
+                const script = document.createElement('script');
+                script.textContent = `
+                    (function() {
+                        if (typeof GM_info !== 'undefined' && typeof GM_setValue !== 'undefined') {
+                            // 存储新脚本内容
+                            GM_setValue('ewtHelperNewScript', \`${scriptContent.replace(/`/g, '\\`')}\`);
 
-            const activeItem = itemContainer.querySelector('.item-IPNWw.active-1MWMf');
-            if (!activeItem) return;
-
-            let nextItem = activeItem.nextElementSibling;
-            while (nextItem) {
-                if (nextItem.classList.contains('item-IPNWw')) {
-                    // 模拟真实点击
-                    const clickEvent = new MouseEvent('click', {
-                        bubbles: true,
-                        cancelable: true,
-                        view: window
-                    });
-                    nextItem.dispatchEvent(clickEvent);
-                    
-                    stats.videoPlayCount++;
-                    updateStatsDisplay();
-                    
-                    // 播放提示音
-                    playNotificationSound('next');
-                    return;
-                }
-                nextItem = nextItem.nextElementSibling;
+                            // 提示用户并刷新
+                            if (confirm('更新成功！请点击确定刷新页面使更改生效。')) {
+                                location.reload();
+                            }
+                        }
+                    })();
+                `;
+                document.body.appendChild(script);
+                document.body.removeChild(script);
+            } catch (e) {
+                alert(`更新安装失败: ${e.message}`);
             }
-        } catch (e) {
-            console.error('连播功能出错:', e);
+        },
+
+        /**
+         * 初始化更新检查
+         */
+        init() {
+            // 检查是否有已下载的更新
+            const newScript = GM_getValue('ewtHelperNewScript', null);
+            if (newScript) {
+                // 清除存储的脚本
+                GM_deleteValue('ewtHelperNewScript');
+                // 替换当前脚本
+                eval(newScript);
+                return;
+            }
+
+            // 立即检查一次
+            this.checkForUpdates();
+
+            // 设置定时检查
+            this.updateCheckIntervalId = setInterval(() => {
+                this.checkForUpdates();
+            }, UpdateConfig.checkInterval);
+        },
+
+        /**
+         * 停止更新检查
+         */
+        stop() {
+            if (this.updateCheckIntervalId) {
+                clearInterval(this.updateCheckIntervalId);
+                this.updateCheckIntervalId = null;
+            }
         }
-    }
-    
-    // 处理题目，自动点击跳题按钮
-    function handleSkipQuestions() {
-        try {
-            // 查找所有可能的"跳题"按钮
-            const skipTexts = ['跳过', '跳题', '跳过题目', '暂不回答', '以后再说', '跳过本题'];
-            let skipButton = null;
-            
-            // 尝试通过多种选择器查找跳题按钮
-            skipTexts.forEach(text => {
-                if (skipButton) return;
-                
-                // 检查按钮元素
-                const buttons = document.querySelectorAll('button, a, span.btn, div.btn');
-                buttons.forEach(btn => {
-                    if (btn.textContent.trim() === text) {
-                        skipButton = btn;
-                    }
-                });
-                
-                // 检查包含跳题文本的其他元素
-                if (!skipButton) {
-                    const elements = document.evaluate(
-                        `//*[text()="${text}"]`,
-                        document,
-                        null,
-                        XPathResult.FIRST_ORDERED_NODE_TYPE,
-                        null
-                    ).singleNodeValue;
-                    
-                    if (elements) {
-                        skipButton = elements;
-                    }
+    };
+
+    /**
+     * 核心控制模块
+     */
+    const ScriptController = {
+        runTimeIntervalId: null,
+
+        /**
+         * 启动脚本
+         */
+        start() {
+            if (!Utils.isHomeworkPath()) {
+                console.log('当前页面不是作业页面，脚本未启动');
+                return;
+            }
+
+            // 初始化UI
+            UI.createControlPanel();
+
+            // 启动功能模块
+            AutoCheck.start();
+            AutoPlay.start();
+            AutoSkip.start();
+
+            // 启动运行时长更新
+            this.runTimeIntervalId = setInterval(() => {
+                Stats.updateRunTime();
+            }, 1000);
+
+            console.log('升学E网通助手（增强版）已启动');
+        },
+
+        /**
+         * 停止脚本
+         */
+        stop() {
+            // 停止功能模块
+            AutoCheck.stop();
+            AutoPlay.stop();
+            AutoSkip.stop();
+            UpdateChecker.stop();
+
+            // 停止运行时长更新
+            if (this.runTimeIntervalId) {
+                clearInterval(this.runTimeIntervalId);
+                this.runTimeIntervalId = null;
+            }
+
+            // 移除UI
+            UI.removePanel();
+
+            console.log('升学E网通助手（增强版）已停止');
+        },
+
+        /**
+         * 监听哈希变化
+         */
+        watchHashChange() {
+            window.addEventListener('hashchange', () => {
+                const isHomework = Utils.isHomeworkPath();
+                const isRunning = !!this.runTimeIntervalId;
+
+                if (isHomework && !isRunning) {
+                    this.start();
+                } else if (!isHomework && isRunning) {
+                    this.stop();
                 }
             });
-            
-            // 如果找到跳题按钮且未被点击过，则点击它
-            if (skipButton && !skipButton.dataset.skipClicked) {
-                // 标记为已点击，避免重复点击
-                skipButton.dataset.skipClicked = 'true';
-                
-                // 模拟真实点击
-                const clickEvent = new MouseEvent('click', {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window
-                });
-                skipButton.dispatchEvent(clickEvent);
-                
-                stats.skippedQuestionCount++;
-                updateStatsDisplay();
-                
-                // 播放提示音
-                playNotificationSound('skip');
-                
-                // 5秒后清除标记，允许处理下一个题目
-                setTimeout(() => {
-                    delete skipButton.dataset.skipClicked;
-                }, 5000);
-            }
-        } catch (e) {
-            console.error('跳题功能出错:', e);
         }
-    }
-    
-    // 播放通知音效
-    function playNotificationSound(type) {
-        try {
-            // 使用不同频率的简单提示音区分不同操作
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            
-            // 根据类型设置不同音调
-            oscillator.type = 'sine';
-            switch(type) {
-                case 'check':
-                    oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
-                    break;
-                case 'next':
-                    oscillator.frequency.setValueAtTime(660, audioContext.currentTime);
-                    break;
-                case 'skip':
-                    oscillator.frequency.setValueAtTime(1046, audioContext.currentTime);
-                    break;
-                default:
-                    oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
-            }
-            gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-            
-            oscillator.start();
-            oscillator.stop(audioContext.currentTime + 0.15);
-        } catch (e) {
-            // 音效非必需功能，出错时忽略
-        }
-    }
-
-    // 清理函数 - 确保脚本卸载时清理资源
-    function cleanup() {
-        if (checkIntervalId) clearInterval(checkIntervalId);
-        if (rewatchIntervalId) clearInterval(rewatchIntervalId);
-        if (skipQuestionIntervalId) clearInterval(skipQuestionIntervalId);
-        if (runTimeIntervalId) clearInterval(runTimeIntervalId);
-        if (updateCheckIntervalId) clearInterval(updateCheckIntervalId);
-        
-        const panel = document.getElementById('ewt-helper-panel');
-        if (panel) panel.remove();
-    }
+    };
 
     // 初始化
-    createControlPanel();
-    toggleCheckInterval();
-    toggleRewatchInterval();
-    toggleSkipQuestionInterval(); // 启动自动跳题
-    runTimeIntervalId = setInterval(updateRunTime, 1000);
-    updateStatsDisplay();
-    setupAutoUpdateCheck(); // 启动自动更新检查
-    
-    // 监听页面卸载，清理资源
-    window.addEventListener('beforeunload', cleanup);
+    UpdateChecker.init(); // 先初始化更新检查
+    ScriptController.start();
+    ScriptController.watchHashChange();
+
+    // 页面卸载时清理
+    window.addEventListener('beforeunload', () => {
+        ScriptController.stop();
+    });
 
 })();
 // Ciallo～(∠・ω< )⌒★
