@@ -9,8 +9,8 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @updateURL    https://raw.githubusercontent.com/你的用户名/你的仓库名/main/脚本文件名.user.js
-// @downloadURL  https://raw.githubusercontent.com/你的用户名/你的仓库名/main/脚本文件名.user.js
+// @updateURL    https://raw.githubusercontent.com/Lirzh/EWT360-Helper/main/main.user.js
+// @downloadURL  https://raw.githubusercontent.com/Lirzh/EWT360-Helper/main/main.user.js
 // 此脚本完全免费，倒卖的人绝对私募了XD
 // ==/UserScript==
 
@@ -19,10 +19,10 @@
 
     // 配置 GitHub 仓库信息 - 请替换为实际仓库信息
     const githubConfig = {
-        user: "你的GitHub用户名",
-        repo: "你的仓库名",
-        scriptPath: "脚本文件名.user.js", // 脚本在仓库中的路径
-        checkInterval: 86400000, // 自动检查更新间隔(ms)，默认24小时
+        user: "Lirzh",
+        repo: "EWT360-Helper",
+        scriptPath: "main.user.js", // 脚本在仓库中的路径
+        checkInterval: 600,000, // 自动检查更新间隔(ms)，默认10分钟
         lastCheckTimeKey: "ewtHelperLastCheckTime" // 本地存储键名
     };
 
