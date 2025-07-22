@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         升学E网通助手（增强版）
 // @namespace    https://www.yuzu-soft.com/products.html
-// @version      1.0.0
+// @version      1.0.1
 // @description  自动通过随机检查、自动播放下一视频、自动跳题，支持GitHub自动更新
 // @author       仅供学习交流，严禁用于商业用途，请于24小时内删除
-// @match        https://teacher.ewt360.com/*
+// @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html#/homework/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
