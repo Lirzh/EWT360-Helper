@@ -5,14 +5,28 @@
 // @description  自动通过随机检查、自动播放下一视频、自动跳题，固定界面不可移动
 // @author       仅供学习交流，严禁用于商业用途，请于24小时内删除
 // @match        https://teacher.ewt360.com/*
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @grant        GM_registerMenuCommand
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @updateURL    https://raw.githubusercontent.com/你的用户名/你的仓库名/main/脚本文件名.user.js
+// @downloadURL  https://raw.githubusercontent.com/你的用户名/你的仓库名/main/脚本文件名.user.js
 // 此脚本完全免费，倒卖的人绝对私募了XD
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // 统计变量（移除过检状态相关）
+    // 配置 GitHub 仓库信息 - 请替换为实际仓库信息
+    const githubConfig = {
+        user: "你的GitHub用户名",
+        repo: "你的仓库名",
+        scriptPath: "脚本文件名.user.js", // 脚本在仓库中的路径
+        checkInterval: 86400000, // 自动检查更新间隔(ms)，默认24小时
+        lastCheckTimeKey: "ewtHelperLastCheckTime" // 本地存储键名
+    };
+
+    // 统计变量
     let stats = {
         videoPlayCount: 0,        // 累计连播视频数
         totalCheckCount: 0,       // 累计过检次数
@@ -24,13 +38,14 @@
     // 开关状态变量
     let isCheckEnabled = true;
     let isRewatchEnabled = true;
-    let isSkipQuestionEnabled = true; // 自动跳题开关
+    let isSkipQuestionEnabled = true;
     let checkIntervalId = null;
     let rewatchIntervalId = null;
-    let skipQuestionIntervalId = null; // 自动跳题定时器
+    let skipQuestionIntervalId = null;
     let runTimeIntervalId = null;
+    let updateCheckIntervalId = null;
 
-    // 配置参数 - 可根据实际情况调整
+    // 配置参数
     const config = {
         checkInterval: 1000,      // 检查间隔(ms)
         rewatchInterval: 2000,    // 连播检查间隔(ms)
@@ -39,14 +54,14 @@
         panelHoverOpacity: 1.0    // 面板hover透明度
     };
 
-    // 创建固定控制面板（移除过检状态显示）
+    // 创建固定控制面板
     function createControlPanel() {
         const panel = document.createElement('div');
         panel.id = 'ewt-helper-panel';
         panel.style.position = 'fixed';
         panel.style.top = '0';
         panel.style.left = '50%';
-        panel.style.transform = 'translateX(-50%)'; // 保持居中且固定
+        panel.style.transform = 'translateX(-50%)';
         panel.style.zIndex = '9999';
         panel.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
         panel.style.padding = '8px 15px';
@@ -69,7 +84,7 @@
             panel.style.opacity = config.panelOpacity;
         });
 
-        // 统计信息区（移除过检状态项）
+        // 统计信息区
         const statsDiv = document.createElement('div');
         statsDiv.style.display = 'flex';
         statsDiv.style.alignItems = 'center';
@@ -122,6 +137,18 @@
         skipButton.style.fontSize = '12px';
         skipButton.style.transition = 'background-color 0.2s';
 
+        // 检查更新按钮
+        const updateButton = document.createElement('button');
+        updateButton.textContent = '检查更新';
+        updateButton.style.padding = '3px 8px';
+        updateButton.style.backgroundColor = '#2196F3';
+        updateButton.style.color = 'white';
+        updateButton.style.border = 'none';
+        updateButton.style.borderRadius = '12px';
+        updateButton.style.cursor = 'pointer';
+        updateButton.style.fontSize = '12px';
+        updateButton.style.transition = 'background-color 0.2s';
+
         // 重置按钮
         const resetButton = document.createElement('button');
         resetButton.textContent = '重置统计';
@@ -134,15 +161,7 @@
         resetButton.style.fontSize = '12px';
         resetButton.style.transition = 'background-color 0.2s';
 
-        resetButton.addEventListener('mouseover', () => {
-            resetButton.style.backgroundColor = '#777';
-        });
-
-        resetButton.addEventListener('mouseout', () => {
-            resetButton.style.backgroundColor = '#555';
-        });
-
-        // 按钮事件
+        // 按钮事件监听
         checkButton.addEventListener('click', () => {
             isCheckEnabled = !isCheckEnabled;
             checkButton.textContent = `过检: ${isCheckEnabled ? '开' : '关'}`;
@@ -157,12 +176,15 @@
             toggleRewatchInterval();
         });
 
-        // 跳题按钮事件
         skipButton.addEventListener('click', () => {
             isSkipQuestionEnabled = !isSkipQuestionEnabled;
             skipButton.textContent = `跳题: ${isSkipQuestionEnabled ? '开' : '关'}`;
             skipButton.style.backgroundColor = isSkipQuestionEnabled ? '#4CAF50' : '#f44336';
             toggleSkipQuestionInterval();
+        });
+
+        updateButton.addEventListener('click', () => {
+            checkForUpdates(true);
         });
 
         resetButton.addEventListener('click', () => {
@@ -175,16 +197,18 @@
             }
         });
 
+        // 添加所有按钮到面板
         buttonsDiv.appendChild(checkButton);
         buttonsDiv.appendChild(rewatchButton);
         buttonsDiv.appendChild(skipButton);
+        buttonsDiv.appendChild(updateButton);
         buttonsDiv.appendChild(resetButton);
         panel.appendChild(buttonsDiv);
 
         document.body.appendChild(panel);
     }
 
-    // 更新统计显示（移除过检状态相关）
+    // 更新统计显示
     function updateStatsDisplay() {
         document.getElementById('videoCount').textContent = stats.videoPlayCount;
         document.getElementById('totalCheckCount').textContent = stats.totalCheckCount;
@@ -203,7 +227,7 @@
         updateStatsDisplay();
     }
 
-    // 自动过检控制
+    // 定时器控制函数
     function toggleCheckInterval() {
         if (isCheckEnabled && !checkIntervalId) {
             checkIntervalId = setInterval(clickSpecificSpan, config.checkInterval);
@@ -213,7 +237,6 @@
         }
     }
 
-    // 自动连播控制
     function toggleRewatchInterval() {
         if (isRewatchEnabled && !rewatchIntervalId) {
             rewatchIntervalId = setInterval(handleRewatchElement, config.rewatchInterval);
@@ -223,7 +246,6 @@
         }
     }
 
-    // 自动跳题控制
     function toggleSkipQuestionInterval() {
         if (isSkipQuestionEnabled && !skipQuestionIntervalId) {
             skipQuestionIntervalId = setInterval(handleSkipQuestions, config.skipQuestionInterval);
@@ -231,6 +253,98 @@
             clearInterval(skipQuestionIntervalId);
             skipQuestionIntervalId = null;
         }
+    }
+
+    // 启动自动检查更新定时器
+    function startUpdateCheckInterval() {
+        if (updateCheckIntervalId) {
+            clearInterval(updateCheckIntervalId);
+        }
+        
+        // 检查是否需要立即检查更新（超过24小时未检查）
+        const lastCheckTime = GM_getValue(githubConfig.lastCheckTimeKey, 0);
+        const now = new Date().getTime();
+        
+        if (now - lastCheckTime > githubConfig.checkInterval) {
+            checkForUpdates(false); // 静默检查
+        }
+        
+        // 设置定期检查
+        updateCheckIntervalId = setInterval(() => {
+            checkForUpdates(false);
+        }, githubConfig.checkInterval);
+    }
+
+    // 版本比较函数
+    function compareVersions(current, latest) {
+        const currentParts = current.split('.').map(Number);
+        const latestParts = latest.split('.').map(Number);
+        
+        for (let i = 0; i < Math.max(currentParts.length, latestParts.length); i++) {
+            const currentVal = currentParts[i] || 0;
+            const latestVal = latestParts[i] || 0;
+            
+            if (latestVal > currentVal) return true; // 有更新
+            if (latestVal < currentVal) return false; // 当前版本更新
+        }
+        return false; // 版本相同
+    }
+
+    // 检查更新函数
+    function checkForUpdates(showNoUpdateMsg) {
+        // 记录检查时间
+        GM_setValue(githubConfig.lastCheckTimeKey, new Date().getTime());
+        
+        // 构建API URL
+        const apiUrl = `https://api.github.com/repos/${githubConfig.user}/${githubConfig.repo}/contents/${githubConfig.scriptPath}`;
+        
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: apiUrl,
+            headers: {
+                "Accept": "application/vnd.github.v3+json"
+            },
+            onload: function(response) {
+                try {
+                    const data = JSON.parse(response.responseText);
+                    const content = atob(data.content.replace(/\n/g, ''));
+                    
+                    // 从内容中提取版本号
+                    const versionMatch = content.match(/@version\s+(\d+\.\d+\.\d+)/);
+                    if (!versionMatch || !versionMatch[1]) {
+                        if (showNoUpdateMsg) {
+                            alert('无法获取最新版本信息');
+                        }
+                        return;
+                    }
+                    
+                    const latestVersion = versionMatch[1];
+                    const currentVersion = GM_info.script.version;
+                    
+                    // 比较版本
+                    if (compareVersions(currentVersion, latestVersion)) {
+                        if (confirm(`发现新版本 ${latestVersion}！当前版本 ${currentVersion}\n是否立即更新？`)) {
+                            const rawUrl = `https://raw.githubusercontent.com/${githubConfig.user}/${githubConfig.repo}/main/${githubConfig.scriptPath}`;
+                            // 在新标签页打开更新链接（Tampermonkey会自动提示安装）
+                            window.open(rawUrl, '_blank');
+                        }
+                    } else if (showNoUpdateMsg) {
+                        alert(`当前已是最新版本 (${currentVersion})`);
+                    }
+                } catch (e) {
+                    console.error('更新检查失败:', e);
+                    if (showNoUpdateMsg) {
+                        alert('检查更新时发生错误');
+                    }
+                }
+            },
+            onerror: function() {
+                console.error('更新检查请求失败');
+                if (showNoUpdateMsg) {
+                    alert('无法连接到更新服务器');
+                }
+            }
+        });
     }
 
     // 点击过检按钮
@@ -403,12 +517,13 @@
         }
     }
 
-    // 清理函数 - 确保脚本卸载时清理资源
+    // 清理函数
     function cleanup() {
         if (checkIntervalId) clearInterval(checkIntervalId);
         if (rewatchIntervalId) clearInterval(rewatchIntervalId);
         if (skipQuestionIntervalId) clearInterval(skipQuestionIntervalId);
         if (runTimeIntervalId) clearInterval(runTimeIntervalId);
+        if (updateCheckIntervalId) clearInterval(updateCheckIntervalId);
 
         const panel = document.getElementById('ewt-helper-panel');
         if (panel) panel.remove();
@@ -418,8 +533,9 @@
     createControlPanel();
     toggleCheckInterval();
     toggleRewatchInterval();
-    toggleSkipQuestionInterval(); // 启动自动跳题
+    toggleSkipQuestionInterval();
     runTimeIntervalId = setInterval(updateRunTime, 1000);
+    startUpdateCheckInterval(); // 启动更新检查
     updateStatsDisplay();
 
     // 监听页面卸载，清理资源
