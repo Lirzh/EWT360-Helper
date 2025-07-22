@@ -22,7 +22,7 @@
         user: "Lirzh",
         repo: "EWT360-Helper",
         scriptPath: "main.user.js", // 脚本在仓库中的路径
-        checkInterval: 600,000, // 自动检查更新间隔(ms)，默认10分钟
+        checkInterval: 600000, // 自动检查更新间隔(ms)，默认10分钟
         lastCheckTimeKey: "ewtHelperLastCheckTime" // 本地存储键名
     };
 
