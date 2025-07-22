@@ -53,6 +53,6 @@
 
 我们非常感谢所有为项目做出贡献的开发者 / AI（排名不分先后）：
 
-[ZNonk](https://github.com/ZNink) 和 [Lirzh](https://github.com/lirzh)
+[ZNink](https://github.com/ZNink) 和 [Lirzh](https://github.com/lirzh)
 
 [Kimi](https://www.kimi.com/kimiplus-square) 和 [豆包AI](https://doubao.com)
