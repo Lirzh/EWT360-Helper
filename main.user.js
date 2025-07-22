@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         升学E网通助手（增强版）
 // @namespace    https://www.yuzu-soft.com/products.html
-// @version      1.0.2
+// @version      1.1.0
 // @description  自动通过随机检查、自动播放下一视频、自动跳题（仅作业页面生效）
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @author       仅供学习交流，严禁用于商业用途，请于24小时内删除
@@ -21,6 +21,7 @@
         checkInterval: 1000,      // 自动过检检查间隔
         rewatchInterval: 2000,    // 视频连播检查间隔
         skipQuestionInterval: 1500, // 自动跳题检查间隔
+        tipsUpdateInterval: 10000, // 小贴士更新间隔(毫秒)
         // 控制面板样式
         panelOpacity: 0.9,        // 常态透明度
         panelHoverOpacity: 1.0,   // hover时透明度
@@ -80,6 +81,89 @@
     };
 
     /**
+     * 小贴士模块 - 管理随机小贴士的获取和显示
+     * 小贴士内容已内置在脚本中，无需外部请求
+     */
+    const Tips = {
+        // 内置小贴士列表
+        tipsList: [
+            "学习时保持规律的作息，效率会更高哦",
+            "每学习45分钟，建议休息5-10分钟",
+            "做好笔记是巩固知识的有效方法",
+            "主动思考比被动接受信息更重要",
+            "制定明确的学习目标能提高动力",
+            "遇到难题可以先标记，稍后集中解决",
+            "理解概念比死记硬背更有效",
+            "尝试用自己的话解释学到的知识",
+            "保持积极心态，学习会更轻松",
+            "适当运动有助于提高学习效率",
+            "整理错题本是查漏补缺的好方法",
+            "睡前复习能帮助巩固记忆",
+            "多喝水，保持大脑良好状态",
+            "将大任务分解成小步骤，更容易完成",
+            "定期回顾已学内容，防止遗忘",
+            "找到适合自己的学习环境很重要",
+            "不要害怕提问，提问是进步的开始",
+            "合理规划时间，平衡各科学习",
+            "学习时尽量远离手机等干扰源",
+            "相信自己的能力，保持自信心",
+            "这个脚本是免费的！",
+            "开发者有两位哦！",
+            "初衷是为了记笔记时不用打卡",
+            "给颗 star 吧！！",
+            "眼保健操不要跳过哦！"
+
+        ],
+        currentTip: '加载中小贴士...',
+        intervalId: null,
+
+        /**
+         * 显示随机一条小贴士
+         */
+        showRandomTip() {
+            if (this.tipsList.length === 0) return;
+
+            const randomIndex = Math.floor(Math.random() * this.tipsList.length);
+            this.currentTip = this.tipsList[randomIndex];
+            this.updateDisplay();
+        },
+
+        /**
+         * 更新页面显示
+         */
+        updateDisplay() {
+            const tipElement = document.getElementById('tipDisplay');
+            if (tipElement) {
+                tipElement.textContent = this.currentTip;
+            }
+        },
+
+        /**
+         * 启动定时更新小贴士
+         */
+        start() {
+            // 立即显示一条小贴士
+            this.showRandomTip();
+
+            if (this.intervalId) return;
+
+            this.intervalId = setInterval(() => {
+                this.showRandomTip();
+            }, Config.tipsUpdateInterval);
+        },
+
+        /**
+         * 停止定时更新
+         */
+        stop() {
+            if (this.intervalId) {
+                clearInterval(this.intervalId);
+                this.intervalId = null;
+            }
+        }
+    };
+
+    /**
      * UI模块 - 管理控制面板的创建与交互
      * 包含面板DOM生成、按钮事件绑定等
      */
@@ -123,6 +207,8 @@
 
             // 添加统计信息区
             panel.appendChild(this.createStatsArea());
+            // 添加小贴士区域
+            panel.appendChild(this.createTipsArea());
             // 添加功能按钮区
             panel.appendChild(this.createButtonArea());
 
@@ -148,6 +234,22 @@
                 <div>时长: <span id="runTime">00:00:00</span></div>
             `;
             return statsDiv;
+        },
+
+        /**
+         * 创建小贴士显示区域
+         */
+        createTipsArea() {
+            const tipsDiv = document.createElement('div');
+            tipsDiv.style.display = 'flex';
+            tipsDiv.style.alignItems = 'center';
+            tipsDiv.style.padding = '0 10px';
+            tipsDiv.style.borderLeft = '1px solid rgba(255, 255, 255, 0.3)';
+            tipsDiv.innerHTML = `
+                <span style="margin-right: 5px; color:#FFC107">小贴士:</span>
+                <span id="tipDisplay" style="color:#FFEB3B; max-width: 300px; overflow: hidden; text-overflow: ellipsis;"></span>
+            `;
+            return tipsDiv;
         },
 
         /**
@@ -312,12 +414,12 @@
          */
         checkAndClick() {
             try {
-                // 查询所有可能的按钮（通过类名匹配，原脚本使用的类名）
+                // 查询所有可能的按钮（通过类名匹配）
                 const buttons = document.querySelectorAll('span.btn-3LStS');
                 buttons.forEach(button => {
                     // 匹配按钮文本（精确匹配"点击通过检查"）
                     if (button.textContent.trim() === '点击通过检查') {
-                        // 模拟真实鼠标点击（带冒泡和事件属性，更难被检测）
+                        // 模拟真实鼠标点击
                         const clickEvent = new MouseEvent('click', {
                             bubbles: true,
                             cancelable: true,
@@ -329,7 +431,7 @@
                         Stats.data.totalCheckCount++;
                         Stats.updateDisplay();
 
-                        // 播放提示音（区分过检类型）
+                        // 播放提示音
                         Utils.playSound('check');
                     }
                 });
@@ -364,7 +466,7 @@
         start() {
             if (this.intervalId) return;
 
-            // 每隔指定时间检查一次（Config.rewatchInterval）
+            // 每隔指定时间检查一次
             this.intervalId = setInterval(() => {
                 this.checkAndSwitch();
             }, Config.rewatchInterval);
@@ -382,29 +484,28 @@
 
         /**
          * 检查视频进度并切换到下一视频
-         * 作用：通过进度条判断视频是否播放完成，完成则查找下一视频并点击
          */
         checkAndSwitch() {
             try {
-                // 1. 检查视频进度：通过进度条宽度判断（原脚本逻辑）
+                // 1. 检查视频进度：通过进度条宽度判断
                 const progressBar = document.querySelector('.video-progress-bar');
                 if (progressBar) {
-                    // 进度条宽度通常以百分比表示（如"100%"）
+                    // 进度条宽度通常以百分比表示
                     const progress = parseFloat(progressBar.style.width) || 0;
-                    // 视频播放进度超过95%才认为是播放完成（避免提前切换）
+                    // 视频播放进度超过95%才认为是播放完成
                     if (progress < 95) return;
                 }
 
-                // 2. 验证连播相关元素是否存在（原脚本使用的类名）
+                // 2. 验证连播相关元素是否存在
                 const rewatchElement = document.querySelector('.progress-action-ghost-1cxSL');
                 const videoListContainer = document.querySelector('.listCon-N9Rlm');
                 if (!rewatchElement || !videoListContainer) return;
 
-                // 3. 查找当前播放的视频项（带active类的项）
+                // 3. 查找当前播放的视频项
                 const activeVideo = videoListContainer.querySelector('.item-IPNWw.active-1MWMf');
                 if (!activeVideo) return;
 
-                // 4. 查找下一个视频项（同类型的.item-IPNWw）
+                // 4. 查找下一个视频项
                 let nextVideo = activeVideo.nextElementSibling;
                 while (nextVideo) {
                     if (nextVideo.classList.contains('item-IPNWw')) {
@@ -420,11 +521,11 @@
                         Stats.data.videoPlayCount++;
                         Stats.updateDisplay();
 
-                        // 播放提示音（区分连播类型）
+                        // 播放提示音
                         Utils.playSound('next');
-                        return; // 找到并点击后退出循环
+                        return;
                     }
-                    nextVideo = nextVideo.nextElementSibling; // 继续查找下一个兄弟元素
+                    nextVideo = nextVideo.nextElementSibling;
                 }
             } catch (error) {
                 console.error('自动连播功能出错:', error);
@@ -452,12 +553,11 @@
 
         /**
          * 启动自动跳题
-         * 作用：定时检查页面中是否有跳题按钮，有则自动点击
          */
         start() {
             if (this.intervalId) return;
 
-            // 每隔指定时间检查一次（Config.skipQuestionInterval）
+            // 每隔指定时间检查一次
             this.intervalId = setInterval(() => {
                 this.checkAndSkip();
             }, Config.skipQuestionInterval);
@@ -475,29 +575,28 @@
 
         /**
          * 检查并点击跳题按钮
-         * 作用：查找各类可能的跳题按钮文本，模拟点击并更新统计
          */
         checkAndSkip() {
             try {
-                // 可能的跳题按钮文本（覆盖多种表述）
+                // 可能的跳题按钮文本
                 const skipTexts = ['跳过', '跳题', '跳过题目', '暂不回答', '以后再说', '跳过本题'];
                 let targetButton = null;
 
                 // 遍历所有可能的文本，查找匹配的按钮
                 skipTexts.some(text => {
-                    // 1. 先检查常见按钮元素（button/a/带btn类的元素）
+                    // 1. 先检查常见按钮元素
                     const buttons = document.querySelectorAll('button, a, span.btn, div.btn');
                     for (const btn of buttons) {
                         if (btn.textContent.trim() === text) {
                             targetButton = btn;
-                            return true; // 找到后退出循环
+                            return true;
                         }
                     }
 
-                    // 2. 若未找到，用XPath查询所有包含该文本的元素
+                    // 2. 若未找到，用XPath查询
                     if (!targetButton) {
                         const xpathResult = document.evaluate(
-                            `//*[text()="${text}"]`, // XPath表达式：文本精确匹配
+                            `//*[text()="${text}"]`,
                             document,
                             null,
                             XPathResult.FIRST_ORDERED_NODE_TYPE,
@@ -506,15 +605,15 @@
                         const element = xpathResult.singleNodeValue;
                         if (element) {
                             targetButton = element;
-                            return true; // 找到后退出循环
+                            return true;
                         }
                     }
-                    return false; // 未找到，继续检查下一个文本
+                    return false;
                 });
 
-                // 若找到跳题按钮且未标记为已点击（避免重复点击）
+                // 若找到跳题按钮且未标记为已点击
                 if (targetButton && !targetButton.dataset.skipClicked) {
-                    // 标记为已点击（添加自定义属性）
+                    // 标记为已点击
                     targetButton.dataset.skipClicked = 'true';
 
                     // 模拟真实点击
@@ -529,10 +628,10 @@
                     Stats.data.skippedQuestionCount++;
                     Stats.updateDisplay();
 
-                    // 播放提示音（区分跳题类型）
+                    // 播放提示音
                     Utils.playSound('skip');
 
-                    // 5秒后清除标记（允许处理下一题）
+                    // 5秒后清除标记
                     setTimeout(() => {
                         delete targetButton.dataset.skipClicked;
                     }, 5000);
@@ -540,69 +639,56 @@
             } catch (error) {
                 console.error('自动跳题功能出错:', error);
             }
-        },
-
-        /**
-         * 停止自动跳题
-         * 作用：清除定时器，停止检查
-         */
-        stop() {
-            if (this.intervalId) {
-                clearInterval(this.intervalId);
-                this.intervalId = null;
-            }
         }
     };
 
     /**
-     * 工具模块 - 提供通用工具函数（如提示音播放）
+     * 工具模块 - 提供通用工具函数
      */
     const Utils = {
         /**
          * 播放操作提示音
-         * @param {string} type - 操作类型（check/next/skip），用于区分音调
+         * @param {string} type - 操作类型（check/next/skip）
          */
         playSound(type) {
             try {
-                // 创建音频上下文（浏览器音频API）
+                // 创建音频上下文
                 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                const oscillator = audioContext.createOscillator(); // 振荡器（生成声音）
-                const gainNode = audioContext.createGain(); // 音量控制
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
 
-                // 连接音频节点（振荡器 -> 音量控制 -> 扬声器）
+                // 连接音频节点
                 oscillator.connect(gainNode);
                 gainNode.connect(audioContext.destination);
 
-                // 设置声音类型为正弦波（柔和的声音）
+                // 设置声音类型为正弦波
                 oscillator.type = 'sine';
-                // 根据操作类型设置不同频率（区分提示音）
+                // 根据操作类型设置不同频率
                 switch (type) {
-                    case 'check': // 过检：880Hz（高音）
+                    case 'check': // 过检：880Hz
                         oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
                         break;
-                    case 'next': // 连播：660Hz（中音）
+                    case 'next': // 连播：660Hz
                         oscillator.frequency.setValueAtTime(660, audioContext.currentTime);
                         break;
-                    case 'skip': // 跳题：1046Hz（更高音）
+                    case 'skip': // 跳题：1046Hz
                         oscillator.frequency.setValueAtTime(1046, audioContext.currentTime);
                         break;
                     default:
                         oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
                 }
-                gainNode.gain.setValueAtTime(0.1, audioContext.currentTime); // 音量（0.1为较低音量）
+                gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
 
-                // 启动声音并在0.15秒后停止（短提示音）
+                // 启动声音并在0.15秒后停止
                 oscillator.start();
                 oscillator.stop(audioContext.currentTime + 0.15);
             } catch (error) {
-                // 音效为非核心功能，出错时忽略（如浏览器不支持AudioContext）
                 console.warn('提示音播放失败:', error);
             }
         },
 
         /**
          * 检查当前路径是否为作业页面
-         * 作用：通过URL哈希部分判断是否匹配#/homework/*
          * @returns {boolean} 是否为作业页面
          */
         isHomeworkPath() {
@@ -618,24 +704,24 @@
 
         /**
          * 启动脚本
-         * 作用：初始化各模块，启动所有功能（仅在作业页面）
          */
         start() {
-            // 检查是否为目标路径（#/homework/*）
+            // 检查是否为目标路径
             if (!Utils.isHomeworkPath()) {
                 console.log('当前页面不是作业页面（路径不匹配#/homework/*），脚本未启动');
                 return;
             }
 
-            // 初始化UI（创建控制面板）
+            // 初始化UI
             UI.createControlPanel();
 
-            // 启动所有功能（默认开启）
+            // 启动所有功能
             AutoCheck.start();
             AutoPlay.start();
             AutoSkip.start();
+            Tips.start();
 
-            // 启动运行时长更新定时器（每秒更新一次）
+            // 启动运行时长更新定时器
             this.runTimeIntervalId = setInterval(() => {
                 Stats.updateRunTime();
             }, 1000);
@@ -645,13 +731,13 @@
 
         /**
          * 停止脚本
-         * 作用：停止所有功能，清理资源
          */
         stop() {
             // 停止所有功能定时器
             AutoCheck.stop();
             AutoPlay.stop();
             AutoSkip.stop();
+            Tips.stop();
 
             // 停止运行时长更新
             if (this.runTimeIntervalId) {
@@ -667,27 +753,26 @@
 
         /**
          * 监听哈希路径变化
-         * 作用：页面不刷新时切换路径（如从其他页到作业页），自动启动/停止脚本
          */
         watchHashChange() {
             window.addEventListener('hashchange', () => {
                 const isHomework = Utils.isHomeworkPath();
-                const isRunning = !!this.runTimeIntervalId; // 通过运行时长定时器判断是否已启动
+                const isRunning = !!this.runTimeIntervalId;
 
                 if (isHomework && !isRunning) {
-                    this.start(); // 切换到作业页且未启动：启动脚本
+                    this.start();
                 } else if (!isHomework && isRunning) {
-                    this.stop(); // 切换出作业页且已启动：停止脚本
+                    this.stop();
                 }
             });
         }
     };
 
-    // 初始化脚本：启动核心控制并监听路径变化
+    // 初始化脚本
     ScriptController.start();
     ScriptController.watchHashChange();
 
-    // 页面卸载时停止脚本（清理资源）
+    // 页面卸载时停止脚本
     window.addEventListener('beforeunload', () => {
         ScriptController.stop();
     });
