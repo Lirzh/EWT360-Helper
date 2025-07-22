@@ -3,7 +3,7 @@
 ## 简介
 
 - **名字**：EWT360 Helper
-- **作者**：[ZNonk](https://github.com/ZNink) 和 [Lirzh](https://github.com/lirzh)
+- **作者**：[ZNink](https://github.com/ZNink) 和 [Lirzh](https://github.com/lirzh)
 - **内容概括**：自动连播、自动过认真度检查、自动跳过课程中的选择题
 - **要求：** 此脚本仅供学习交流，严禁用于商业用途，若有请于24小时内删除，请不要售卖脚本，此脚本完全免费！！
 - **协议**：GPL v2
