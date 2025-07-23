@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         升学E网通助手（增强版）
 // @namespace    https://www.yuzu-soft.com/products.html
-// @version      1.2.0
-// @description  自动通过随机检查、自动播放下一视频、自动跳题（仅作业页面生效），支持1x至16x倍速调节
+// @version      1.3.0
+// @description  自动通过随机检查、自动播放下一视频、自动跳题（仅作业页面生效），支持1x至16x倍速调节，倍速自动维持，新增模式切换功能
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @author       仅供学习交流，严禁用于商业用途，请于24小时内删除
 // @grant        none
@@ -13,18 +13,79 @@
     'use strict';
 
     /**
+     * 配置管理模块 - 处理配置的加载和保存
+     */
+    const ConfigManager = {
+        // 默认配置
+        defaultConfig: {
+            speed: 1,
+            autoCheckEnabled: true,
+            autoPlayEnabled: true,
+            autoSkipEnabled: true,
+            mode: 'normal'
+        },
+
+        // 当前配置
+        config: {},
+
+        // 初始化配置
+        init() {
+            try {
+                // 从本地存储加载配置
+                const savedConfig = localStorage.getItem('ewtHelperConfig');
+                if (savedConfig) {
+                    const parsedConfig = JSON.parse(savedConfig);
+                    // 合并保存的配置和默认配置，确保所有必要配置项都存在
+                    this.config = { ...this.defaultConfig, ...parsedConfig };
+                } else {
+                    this.config = { ...this.defaultConfig };
+                }
+            } catch (e) {
+                console.warn('无法读取或解析本地存储的配置:', e);
+                this.config = { ...this.defaultConfig };
+            }
+            return this.config;
+        },
+
+        // 保存配置到本地存储
+        save() {
+            try {
+                localStorage.setItem('ewtHelperConfig', JSON.stringify(this.config));
+            } catch (e) {
+                console.warn('无法保存配置到本地存储:', e);
+            }
+        },
+
+        // 更新特定配置项
+        update(key, value) {
+            if (Object.keys(this.defaultConfig).includes(key)) {
+                this.config[key] = value;
+                this.save();
+            } else {
+                console.warn(`未知的配置项: ${key}`);
+            }
+        },
+
+        // 获取配置
+        get(key) {
+            return this.config[key];
+        }
+    };
+
+    /**
      * 配置模块 - 存储脚本所有可配置参数
      */
     const Config = {
         // 功能检查间隔（毫秒）
         checkInterval: 1000,      // 自动过检检查间隔
-        rewatchInterval: 2000,    // 视频连播检查间隔
+        rewatchInterval: 2000,    // 视频连连播检查间隔
         skipQuestionInterval: 1500, // 自动跳题检查间隔
+        speedReapplyInterval: 1000, // 倍速自动重应用间隔（1秒）
         // 控制面板样式
         panelOpacity: 0.9,        // 常态透明度
         panelHoverOpacity: 1.0,   // hover时透明度
         // 目标路径匹配规则
-        targetHashPath: '#/homework/' // 作业页面哈希路径前缀
+        targetHashPath: '#/homework/', // 作业页面哈希路径前缀
     };
 
     /**
@@ -54,42 +115,24 @@
             const seconds = Math.floor((durationMs % 60000) / 1000).toString().padStart(2, '0');
             this.data.runTime = `${hours}:${minutes}:${seconds}`;
             this.updateDisplay();
-        },
-
-        reset() {
-            this.data.videoPlayCount = 0;
-            this.data.totalCheckCount = 0;
-            this.data.skippedQuestionCount = 0;
-            this.data.startTime = new Date();
-            this.updateDisplay();
         }
     };
 
     /**
      * 防干扰模块 - 处理视频倍速限制
-     * 通过代理HTMLMediaElement阻止网站限制倍速修改
      */
     const AntiInterference = {
-        /**
-         * 初始化视频倍速保护
-         */
         init() {
             this.proxyVideoElements();
             this.observeNewVideos();
         },
 
-        /**
-         * 代理已存在的video元素
-         */
         proxyVideoElements() {
             document.querySelectorAll('video').forEach(video => {
                 this.proxyVideo(video);
             });
         },
 
-        /**
-         * 监听页面新增的video元素并进行代理
-         */
         observeNewVideos() {
             const observer = new MutationObserver(mutations => {
                 mutations.forEach(mutation => {
@@ -111,37 +154,27 @@
             });
         },
 
-        /**
-         * 代理单个video元素
-         * @param {HTMLVideoElement} video - 要代理的视频元素
-         */
         proxyVideo(video) {
-            if (video.__ewtProxied) return; // 避免重复代理
+            if (video.__ewtProxied) return;
             video.__ewtProxied = true;
 
-            // 保存原始属性和方法
             const originalPlaybackRate = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate');
             const originalAddEventListener = video.addEventListener;
             const originalRemoveEventListener = video.removeEventListener;
 
-            // 代理playbackRate属性
             Object.defineProperty(video, 'playbackRate', {
                 get() {
                     return originalPlaybackRate.get.call(this);
                 },
                 set(value) {
-                    // 强制设置倍速，忽略网站限制
                     originalPlaybackRate.set.call(this, value);
-                    // 触发自定义事件通知倍速已更改
                     this.dispatchEvent(new Event('ewtRateChange'));
                 },
                 configurable: true
             });
 
-            // 代理addEventListener方法，过滤ratechange事件
             video.addEventListener = function(type, listener, options) {
                 if (type === 'ratechange') {
-                    // 记录网站添加的ratechange监听器
                     this.__rateChangeListeners = this.__rateChangeListeners || [];
                     this.__rateChangeListeners.push({ listener, options });
                     return;
@@ -149,7 +182,6 @@
                 return originalAddEventListener.call(this, type, listener, options);
             };
 
-            // 代理removeEventListener方法
             video.removeEventListener = function(type, listener, options) {
                 if (type === 'ratechange' && this.__rateChangeListeners) {
                     this.__rateChangeListeners = this.__rateChangeListeners.filter(
@@ -165,26 +197,55 @@
     };
 
     /**
-     * 倍速控制模块 - 管理视频播放速度调节
+     * 倍速控制模块
      */
     const SpeedControl = {
-        // 支持的倍速列表：1x至16x
         speeds: [1, 1.25, 1.5, 1.75, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16],
         currentSpeed: 1,
+        reapplyIntervalId: null,
 
-        /**
-         * 设置视频播放速度
-         * @param {number} speed - 播放速度倍数
-         */
+        init() {
+            // 从配置加载保存的倍速
+            const savedSpeed = ConfigManager.get('speed');
+            if (this.speeds.includes(savedSpeed)) {
+                this.currentSpeed = savedSpeed;
+            }
+
+            this.reapplyIntervalId = setInterval(() => {
+                this.reapplySpeed();
+            }, Config.speedReapplyInterval);
+        },
+
+        stop() {
+            if (this.reapplyIntervalId) {
+                clearInterval(this.reapplyIntervalId);
+                this.reapplyIntervalId = null;
+            }
+        },
+
+        reapplySpeed() {
+            try {
+                const videos = document.querySelectorAll('video');
+                videos.forEach(video => {
+                    if (Math.abs(video.playbackRate - this.currentSpeed) > 0.1) {
+                        video.playbackRate = this.currentSpeed;
+                        console.log(`已重新应用倍速: ${this.currentSpeed}x`);
+                    }
+                });
+            } catch (error) {
+                console.error('倍速重应用失败:', error);
+            }
+        },
+
         setSpeed(speed) {
             try {
-                // 查找所有视频元素并设置播放速度
                 const videos = document.querySelectorAll('video');
                 videos.forEach(video => {
                     video.playbackRate = speed;
                 });
                 this.currentSpeed = speed;
-                // 更新UI显示
+                // 保存倍速到配置
+                ConfigManager.update('speed', speed);
                 const speedDisplay = document.getElementById('speedDisplay');
                 if (speedDisplay) {
                     speedDisplay.textContent = `${speed}x`;
@@ -194,22 +255,65 @@
             }
         },
 
-        /**
-         * 切换到下一个倍速
-         */
         nextSpeed() {
             const currentIndex = this.speeds.indexOf(this.currentSpeed);
             const nextIndex = (currentIndex + 1) % this.speeds.length;
             this.setSpeed(this.speeds[nextIndex]);
         },
 
-        /**
-         * 切换到上一个倍速
-         */
         prevSpeed() {
             const currentIndex = this.speeds.indexOf(this.currentSpeed);
             const prevIndex = (currentIndex - 1 + this.speeds.length) % this.speeds.length;
             this.setSpeed(this.speeds[prevIndex]);
+        }
+    };
+
+    /**
+     * 模式控制模块 - 管理不同显示模式
+     */
+    const ModeControl = {
+        currentMode: 'normal',
+
+        /**
+         * 初始化模式控制
+         * 从配置管理器加载用户偏好的模式
+         */
+        init() {
+            this.currentMode = ConfigManager.get('mode');
+            this.applyMode();
+        },
+
+        /**
+         * 切换显示模式
+         */
+        toggleMode() {
+            this.currentMode = this.currentMode === 'normal' ? 'minimal' : 'normal';
+            // 保存模式到配置
+            ConfigManager.update('mode', this.currentMode);
+            this.applyMode();
+        },
+
+        /**
+         * 应用当前模式
+         * 根据模式显示或隐藏相应的UI元素
+         * 极简模式保留倍速控制，仅隐藏统计信息
+         */
+        applyMode() {
+            const statsArea = document.getElementById('statsArea');
+            const speedControlArea = document.getElementById('speedControlArea');
+            const modeButton = document.getElementById('modeToggleButton');
+
+            if (this.currentMode === 'minimal') {
+                // 极简模式: 显示功能按钮和倍速控制，隐藏统计信息
+                if (statsArea) statsArea.style.display = 'none';
+                if (speedControlArea) speedControlArea.style.display = 'flex';
+                if (modeButton) modeButton.textContent = '极简';
+            } else {
+                // 普通模式: 显示所有元素
+                if (statsArea) statsArea.style.display = 'flex';
+                if (speedControlArea) speedControlArea.style.display = 'flex';
+                if (modeButton) modeButton.textContent = '普通';
+            }
         }
     };
 
@@ -252,10 +356,14 @@
 
             this.panel = panel;
             document.body.appendChild(panel);
+
+            // 应用当前模式
+            ModeControl.applyMode();
         },
 
         createStatsArea() {
             const statsDiv = document.createElement('div');
+            statsDiv.id = 'statsArea';
             statsDiv.style.display = 'flex';
             statsDiv.style.alignItems = 'center';
             statsDiv.style.gap = '15px';
@@ -268,25 +376,21 @@
             return statsDiv;
         },
 
-        /**
-         * 创建倍速控制区域
-         */
         createSpeedControlArea() {
             const speedDiv = document.createElement('div');
+            speedDiv.id = 'speedControlArea';
             speedDiv.style.display = 'flex';
             speedDiv.style.alignItems = 'center';
             speedDiv.style.padding = '0 10px';
             speedDiv.style.borderLeft = '1px solid rgba(255, 255, 255, 0.3)';
-            
-            // 倍速控制按钮和显示
+
             speedDiv.innerHTML = `
                 <button id="speedDown" style="margin-right:5px; padding:2px 6px; border-radius:4px; border:none; background:#555; color:white; cursor:pointer;">-</button>
                 <span style="color:#FFC107">倍速:</span>
-                <span id="speedDisplay" style="margin:0 5px; color:#FFEB3B">1x</span>
+                <span id="speedDisplay" style="margin:0 5px; color:#FFEB3B">${ConfigManager.get('speed')}x</span>
                 <button id="speedUp" style="margin-left:5px; padding:2px 6px; border-radius:4px; border:none; background:#555; color:white; cursor:pointer;">+</button>
             `;
 
-            // 绑定倍速调节事件
             speedDiv.querySelector('#speedUp').addEventListener('click', () => {
                 SpeedControl.nextSpeed();
             });
@@ -302,27 +406,68 @@
             buttonsDiv.style.display = 'flex';
             buttonsDiv.style.alignItems = 'center';
             buttonsDiv.style.gap = '8px';
+            buttonsDiv.style.paddingLeft = '10px';
+            buttonsDiv.style.borderLeft = '1px solid rgba(255, 255, 255, 0.3)';
+
+            // 添加模式切换按钮
+            const modeButton = this.createModeButton();
+            buttonsDiv.appendChild(modeButton);
 
             buttonsDiv.appendChild(this.createFunctionButton(
                 '过检',
-                (isEnabled) => AutoCheck.toggle(isEnabled)
+                ConfigManager.get('autoCheckEnabled'),
+                (isEnabled) => {
+                    AutoCheck.toggle(isEnabled);
+                    ConfigManager.update('autoCheckEnabled', isEnabled);
+                }
             ));
             buttonsDiv.appendChild(this.createFunctionButton(
                 '连播',
-                (isEnabled) => AutoPlay.toggle(isEnabled)
+                ConfigManager.get('autoPlayEnabled'),
+                (isEnabled) => {
+                    AutoPlay.toggle(isEnabled);
+                    ConfigManager.update('autoPlayEnabled', isEnabled);
+                }
             ));
             buttonsDiv.appendChild(this.createFunctionButton(
                 '跳题',
-                (isEnabled) => AutoSkip.toggle(isEnabled)
+                ConfigManager.get('autoSkipEnabled'),
+                (isEnabled) => {
+                    AutoSkip.toggle(isEnabled);
+                    ConfigManager.update('autoSkipEnabled', isEnabled);
+                }
             ));
-            buttonsDiv.appendChild(this.createResetButton());
 
             return buttonsDiv;
         },
 
-        createFunctionButton(name, toggleCallback) {
+        /**
+         * 创建模式切换按钮
+         */
+        createModeButton() {
             const button = document.createElement('button');
-            let isEnabled = true;
+            button.id = 'modeToggleButton';
+            button.textContent = ModeControl.currentMode === 'normal' ? '普通' : '极简';
+
+            button.style.padding = '3px 8px';
+            button.style.color = 'white';
+            button.style.border = 'none';
+            button.style.borderRadius = '12px';
+            button.style.cursor = 'pointer';
+            button.style.fontSize = '12px';
+            button.style.transition = 'background-color 0.2s';
+            button.style.backgroundColor = '#2196F3';
+
+            button.addEventListener('click', () => {
+                ModeControl.toggleMode();
+            });
+
+            return button;
+        },
+
+        createFunctionButton(name, initialState, toggleCallback) {
+            const button = document.createElement('button');
+            let isEnabled = initialState;
 
             const updateButton = () => {
                 button.textContent = `${name}: ${isEnabled ? '开' : '关'}`;
@@ -342,34 +487,6 @@
                 isEnabled = !isEnabled;
                 updateButton();
                 toggleCallback(isEnabled);
-            });
-
-            return button;
-        },
-
-        createResetButton() {
-            const button = document.createElement('button');
-            button.textContent = '重置统计';
-            button.style.padding = '3px 8px';
-            button.style.backgroundColor = '#555';
-            button.style.color = 'white';
-            button.style.border = 'none';
-            button.style.borderRadius = '12px';
-            button.style.cursor = 'pointer';
-            button.style.fontSize = '12px';
-            button.style.transition = 'background-color 0.2s';
-
-            button.addEventListener('mouseover', () => {
-                button.style.backgroundColor = '#777';
-            });
-            button.addEventListener('mouseout', () => {
-                button.style.backgroundColor = '#555';
-            });
-
-            button.addEventListener('click', () => {
-                if (confirm('确定要重置统计数据吗？')) {
-                    Stats.reset();
-                }
             });
 
             return button;
@@ -642,14 +759,29 @@
                 return;
             }
 
-            UI.createControlPanel();
-            // 初始化倍速为1x并启用防干扰
-            AntiInterference.init();
-            SpeedControl.setSpeed(1);
+            // 初始化配置
+            ConfigManager.init();
 
-            AutoCheck.start();
-            AutoPlay.start();
-            AutoSkip.start();
+            // 初始化模式控制
+            ModeControl.init();
+            UI.createControlPanel();
+
+            // 初始化倍速为保存的值并启用防干扰
+            AntiInterference.init();
+            SpeedControl.setSpeed(ConfigManager.get('speed'));
+            // 启动倍速自动重应用
+            SpeedControl.init();
+
+            // 根据保存的配置状态启动各功能
+            if (ConfigManager.get('autoCheckEnabled')) {
+                AutoCheck.start();
+            }
+            if (ConfigManager.get('autoPlayEnabled')) {
+                AutoPlay.start();
+            }
+            if (ConfigManager.get('autoSkipEnabled')) {
+                AutoSkip.start();
+            }
 
             this.runTimeIntervalId = setInterval(() => {
                 Stats.updateRunTime();
@@ -662,6 +794,9 @@
             AutoCheck.stop();
             AutoPlay.stop();
             AutoSkip.stop();
+
+            // 停止倍速自动重应用
+            SpeedControl.stop();
 
             if (this.runTimeIntervalId) {
                 clearInterval(this.runTimeIntervalId);
@@ -697,4 +832,3 @@
 
 })();
 // Ciallo～(∠・ω< )⌒★
-    
