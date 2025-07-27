@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         升学E网通助手（增强版）
 // @namespace    https://www.yuzu-soft.com/products.html
-// @version      1.3.0
-// @description  自动通过随机检查、自动播放下一视频、自动跳题（仅作业页面生效），支持1x至16x倍速调节，倍速自动维持，新增模式切换功能
+// @version      1.4.0
+// @description  自动通过随机检查、自动播放下一视频、自动跳题（仅作业页面生效），支持1x至16x倍速调节，倍速自动维持，新增模式切换功能，优化挂机模式
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @author       仅供学习交流，严禁用于商业用途，请于24小时内删除
 // @grant        none
@@ -22,7 +22,10 @@
             autoCheckEnabled: true,
             autoPlayEnabled: true,
             autoSkipEnabled: true,
-            mode: 'normal'
+            speedControlEnabled: true, // 倍速功能是否启用
+            mode: 'normal',
+            hangupModeEnabled: false, // 挂机模式状态
+            lastVolume: 1 // 保存最后一次音量设置
         },
 
         // 当前配置
@@ -31,11 +34,9 @@
         // 初始化配置
         init() {
             try {
-                // 从本地存储加载配置
                 const savedConfig = localStorage.getItem('ewtHelperConfig');
                 if (savedConfig) {
                     const parsedConfig = JSON.parse(savedConfig);
-                    // 合并保存的配置和默认配置，确保所有必要配置项都存在
                     this.config = { ...this.defaultConfig, ...parsedConfig };
                 } else {
                     this.config = { ...this.defaultConfig };
@@ -78,14 +79,19 @@
     const Config = {
         // 功能检查间隔（毫秒）
         checkInterval: 1000,      // 自动过检检查间隔
-        rewatchInterval: 2000,    // 视频连连播检查间隔
-        skipQuestionInterval: 1500, // 自动跳题检查间隔
+        rewatchInterval: 1000,    // 视频连连播检查间隔
+        skipQuestionInterval: 1000, // 自动跳题检查间隔
         speedReapplyInterval: 1000, // 倍速自动重应用间隔（1秒）
+        subjectCheckInterval: 1000, // 科目信息检查间隔（3秒）
+        hangupCheckInterval: 1000, // 挂机模式检查间隔（1秒）
+        playCheckInterval: 500,   // 播放状态检查间隔（0.5秒）
         // 控制面板样式
         panelOpacity: 0.9,        // 常态透明度
         panelHoverOpacity: 1.0,   // hover时透明度
         // 目标路径匹配规则
         targetHashPath: '#/homework/', // 作业页面哈希路径前缀
+        // 挂机模式需要跳过的科目列表
+        hangupSkipSubjects: ['语文', '英语', '数学', '历史', '政治', '生物', '地理', '物理', '化学']
     };
 
     /**
@@ -96,8 +102,10 @@
             videoPlayCount: 0,       // 累计连播视频数
             totalCheckCount: 0,      // 累计过检次数
             skippedQuestionCount: 0, // 累计跳题次数
+            skippedVideoCount: 0,    // 累计跳过视频数（挂机模式，不显示）
             startTime: new Date(),   // 脚本启动时间
-            runTime: '00:00:00'      // 累计运行时长
+            runTime: '00:00:00',     // 累计运行时长
+            currentSubject: '未播放' // 当前播放视频的科目（不显示）
         },
 
         updateDisplay() {
@@ -115,6 +123,12 @@
             const seconds = Math.floor((durationMs % 60000) / 1000).toString().padStart(2, '0');
             this.data.runTime = `${hours}:${minutes}:${seconds}`;
             this.updateDisplay();
+        },
+
+        updateSubject(subject) {
+            if (subject && subject !== this.data.currentSubject) {
+                this.data.currentSubject = subject;
+            }
         }
     };
 
@@ -122,17 +136,22 @@
      * 防干扰模块 - 处理视频倍速限制
      */
     const AntiInterference = {
+        // 保存原始的视频事件和属性，用于恢复
+        originalProperties: new Map(),
+
         init() {
             this.proxyVideoElements();
             this.observeNewVideos();
         },
 
+        // 代理所有现有视频元素
         proxyVideoElements() {
             document.querySelectorAll('video').forEach(video => {
                 this.proxyVideo(video);
             });
         },
 
+        // 监听新添加的视频元素
         observeNewVideos() {
             const observer = new MutationObserver(mutations => {
                 mutations.forEach(mutation => {
@@ -154,14 +173,22 @@
             });
         },
 
+        // 代理视频元素以控制倍速
         proxyVideo(video) {
-            if (video.__ewtProxied) return;
-            video.__ewtProxied = true;
+            if (this.originalProperties.has(video)) return;
 
+            // 保存原始属性和方法
             const originalPlaybackRate = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'playbackRate');
             const originalAddEventListener = video.addEventListener;
             const originalRemoveEventListener = video.removeEventListener;
 
+            this.originalProperties.set(video, {
+                playbackRate: originalPlaybackRate,
+                addEventListener: originalAddEventListener,
+                removeEventListener: originalRemoveEventListener
+            });
+
+            // 重写playbackRate属性
             Object.defineProperty(video, 'playbackRate', {
                 get() {
                     return originalPlaybackRate.get.call(this);
@@ -173,6 +200,7 @@
                 configurable: true
             });
 
+            // 重写事件监听方法以过滤ratechange事件
             video.addEventListener = function(type, listener, options) {
                 if (type === 'ratechange') {
                     this.__rateChangeListeners = this.__rateChangeListeners || [];
@@ -193,6 +221,38 @@
             };
 
             console.log('视频倍速保护已启用');
+        },
+
+        // 恢复视频元素原始状态
+        restoreVideo(video) {
+            if (!this.originalProperties.has(video)) return;
+
+            const originals = this.originalProperties.get(video);
+
+            // 恢复playbackRate属性
+            Object.defineProperty(video, 'playbackRate', originals.playbackRate);
+
+            // 恢复事件监听方法
+            video.addEventListener = originals.addEventListener;
+            video.removeEventListener = originals.removeEventListener;
+
+            // 移除保存的属性
+            this.originalProperties.delete(video);
+
+            console.log('视频原始倍速控制已恢复');
+        },
+
+        // 恢复所有视频元素的原始状态
+        restoreAllVideos() {
+            this.originalProperties.forEach((_, video) => {
+                this.restoreVideo(video);
+            });
+        },
+
+        // 重新代理所有视频元素
+        reProxyAllVideos() {
+            this.restoreAllVideos();
+            this.proxyVideoElements();
         }
     };
 
@@ -203,33 +263,118 @@
         speeds: [1, 1.25, 1.5, 1.75, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16],
         currentSpeed: 1,
         reapplyIntervalId: null,
+        isEnabled: true,
+        // 保存挂机模式激活前的倍速设置
+        preHangupSpeed: 1,
 
         init() {
-            // 从配置加载保存的倍速
+            // 从配置加载保存的倍速和开关状态
             const savedSpeed = ConfigManager.get('speed');
+            this.isEnabled = ConfigManager.get('speedControlEnabled');
+
             if (this.speeds.includes(savedSpeed)) {
                 this.currentSpeed = savedSpeed;
+                this.preHangupSpeed = savedSpeed; // 初始化挂机前的速度
             }
 
+            // 根据开关状态决定初始化行为
+            if (this.isEnabled) {
+                this.startReapply();
+            } else {
+                this.disableSpeedControl();
+            }
+
+            // 更新UI显示状态
+            this.updateSpeedControlUI();
+        },
+
+        // 启动倍速重应用定时器
+        startReapply() {
+            if (this.reapplyIntervalId) return;
             this.reapplyIntervalId = setInterval(() => {
                 this.reapplySpeed();
             }, Config.speedReapplyInterval);
         },
 
-        stop() {
+        // 停止倍速重应用定时器
+        stopReapply() {
             if (this.reapplyIntervalId) {
                 clearInterval(this.reapplyIntervalId);
                 this.reapplyIntervalId = null;
             }
         },
 
-        reapplySpeed() {
+        // 切换倍速功能开关
+        toggle(isEnabled) {
+            // 如果在挂机模式下，不允许修改倍速开关
+            if (ConfigManager.get('hangupModeEnabled')) return;
+
+            this.isEnabled = isEnabled;
+
+            if (isEnabled) {
+                this.enableSpeedControl();
+            } else {
+                this.disableSpeedControl();
+            }
+
+            // 保存开关状态
+            ConfigManager.update('speedControlEnabled', isEnabled);
+            // 更新UI
+            this.updateSpeedControlUI();
+        },
+
+        // 启用倍速控制
+        enableSpeedControl() {
+            // 重新代理视频元素
+            AntiInterference.reProxyAllVideos();
+            // 应用保存的倍速
+            this.setSpeed(this.currentSpeed);
+            // 启动重应用定时器
+            this.startReapply();
+        },
+
+        // 禁用倍速控制
+        disableSpeedControl() {
+            // 停止重应用定时器
+            this.stopReapply();
+            // 恢复视频原始控制
+            AntiInterference.restoreAllVideos();
+            // 恢复为1x倍速
+            this.resetToNormalSpeed();
+        },
+
+        // 重置为正常速度
+        resetToNormalSpeed() {
             try {
                 const videos = document.querySelectorAll('video');
                 videos.forEach(video => {
-                    if (Math.abs(video.playbackRate - this.currentSpeed) > 0.1) {
-                        video.playbackRate = this.currentSpeed;
-                        console.log(`已重新应用倍速: ${this.currentSpeed}x`);
+                    video.playbackRate = 1;
+                });
+            } catch (error) {
+                console.error('重置为正常速度失败:', error);
+            }
+        },
+
+        // 更新倍速控制UI显示
+        updateSpeedControlUI() {
+            const speedControlArea = document.getElementById('speedControlArea');
+            if (speedControlArea) {
+                speedControlArea.style.display = this.isEnabled ? 'flex' : 'none';
+            }
+        },
+
+        reapplySpeed() {
+            if (!this.isEnabled) return;
+
+            // 挂机模式下强制维持1.0倍速
+            const targetSpeed = ConfigManager.get('hangupModeEnabled') ? 1.0 : this.currentSpeed;
+
+            try {
+                const videos = document.querySelectorAll('video');
+                videos.forEach(video => {
+                    if (Math.abs(video.playbackRate - targetSpeed) > 0.1) {
+                        video.playbackRate = targetSpeed;
+                        console.log(`已重新应用倍速: ${targetSpeed}x`);
                     }
                 });
             } catch (error) {
@@ -238,12 +383,18 @@
         },
 
         setSpeed(speed) {
+            // 挂机模式下不允许修改倍速
+            if (ConfigManager.get('hangupModeEnabled')) return;
+
+            if (!this.isEnabled) return;
+
             try {
                 const videos = document.querySelectorAll('video');
                 videos.forEach(video => {
                     video.playbackRate = speed;
                 });
                 this.currentSpeed = speed;
+                this.preHangupSpeed = speed; // 更新挂机前的速度
                 // 保存倍速到配置
                 ConfigManager.update('speed', speed);
                 const speedDisplay = document.getElementById('speedDisplay');
@@ -256,15 +407,36 @@
         },
 
         nextSpeed() {
+            // 挂机模式下不允许修改倍速
+            if (ConfigManager.get('hangupModeEnabled')) return;
+
+            if (!this.isEnabled) return;
+
             const currentIndex = this.speeds.indexOf(this.currentSpeed);
             const nextIndex = (currentIndex + 1) % this.speeds.length;
             this.setSpeed(this.speeds[nextIndex]);
         },
 
         prevSpeed() {
+            // 挂机模式下不允许修改倍速
+            if (ConfigManager.get('hangupModeEnabled')) return;
+
+            if (!this.isEnabled) return;
+
             const currentIndex = this.speeds.indexOf(this.currentSpeed);
             const prevIndex = (currentIndex - 1 + this.speeds.length) % this.speeds.length;
             this.setSpeed(this.speeds[prevIndex]);
+        },
+
+        // 挂机模式激活时调用，保存当前速度并设置为1.0
+        activateHangupMode() {
+            this.preHangupSpeed = this.currentSpeed;
+            this.setSpeed(1.0);
+        },
+
+        // 挂机模式关闭时调用，恢复之前的速度
+        deactivateHangupMode() {
+            this.setSpeed(this.preHangupSpeed);
         }
     };
 
@@ -274,46 +446,373 @@
     const ModeControl = {
         currentMode: 'normal',
 
-        /**
-         * 初始化模式控制
-         * 从配置管理器加载用户偏好的模式
-         */
         init() {
             this.currentMode = ConfigManager.get('mode');
             this.applyMode();
         },
 
-        /**
-         * 切换显示模式
-         */
         toggleMode() {
             this.currentMode = this.currentMode === 'normal' ? 'minimal' : 'normal';
-            // 保存模式到配置
             ConfigManager.update('mode', this.currentMode);
             this.applyMode();
         },
 
-        /**
-         * 应用当前模式
-         * 根据模式显示或隐藏相应的UI元素
-         * 极简模式保留倍速控制，仅隐藏统计信息
-         */
         applyMode() {
             const statsArea = document.getElementById('statsArea');
             const speedControlArea = document.getElementById('speedControlArea');
             const modeButton = document.getElementById('modeToggleButton');
 
             if (this.currentMode === 'minimal') {
-                // 极简模式: 显示功能按钮和倍速控制，隐藏统计信息
+                // 极简模式: 隐藏统计信息
                 if (statsArea) statsArea.style.display = 'none';
-                if (speedControlArea) speedControlArea.style.display = 'flex';
                 if (modeButton) modeButton.textContent = '极简';
             } else {
-                // 普通模式: 显示所有元素
+                // 普通模式: 显示统计信息
                 if (statsArea) statsArea.style.display = 'flex';
-                if (speedControlArea) speedControlArea.style.display = 'flex';
                 if (modeButton) modeButton.textContent = '普通';
             }
+
+            // 确保倍速控制区显示状态受SpeedControl控制
+            if (speedControlArea) {
+                speedControlArea.style.display = SpeedControl.isEnabled ? 'flex' : 'none';
+            }
+        }
+    };
+
+    /**
+     * 科目信息模块 - 获取并更新当前播放视频的科目（不显示，仅内部使用）
+     */
+    const SubjectInfo = {
+        intervalId: null,
+
+        start() {
+            if (this.intervalId) return;
+
+            // 立即检查一次，然后定时检查
+            this.checkCurrentSubject();
+            this.intervalId = setInterval(() => {
+                this.checkCurrentSubject();
+            }, Config.subjectCheckInterval);
+        },
+
+        stop() {
+            if (this.intervalId) {
+                clearInterval(this.intervalId);
+                this.intervalId = null;
+            }
+        },
+
+        checkCurrentSubject() {
+            try {
+                const videoListContainer = document.querySelector('.listCon-N9Rlm');
+                if (!videoListContainer) return;
+
+                // 获取当前正在播放的视频项
+                const activeVideo = videoListContainer.querySelector('.item-IPNWw.active-1MWMf');
+                if (!activeVideo) {
+                    Stats.updateSubject('未播放');
+                    return;
+                }
+
+                // 获取科目信息元素（left-SRI55）
+                const subjectElement = activeVideo.querySelector('.left-SRI55');
+                if (subjectElement) {
+                    const subject = subjectElement.textContent.trim();
+                    Stats.updateSubject(subject);
+                } else {
+                    Stats.updateSubject('未知科目');
+                }
+            } catch (error) {
+                console.error('获取科目信息出错:', error);
+            }
+        }
+    };
+
+    /**
+     * 挂机模式模块
+     */
+    const HangupMode = {
+        intervalId: null,
+        playCheckIntervalId: null,
+        lastVolume: 1, // 保存挂机前的音量
+
+        start() {
+            if (this.intervalId) return;
+
+            // 启动定时检查
+            this.intervalId = setInterval(() => {
+                this.checkAndSkipSubjectVideos();
+            }, Config.hangupCheckInterval);
+
+            // 启动播放状态检查（更频繁）
+            this.playCheckIntervalId = setInterval(() => {
+                this.checkPlayState();
+            }, Config.playCheckInterval);
+        },
+
+        stop() {
+            if (this.intervalId) {
+                clearInterval(this.intervalId);
+                this.intervalId = null;
+            }
+
+            if (this.playCheckIntervalId) {
+                clearInterval(this.playCheckIntervalId);
+                this.playCheckIntervalId = null;
+            }
+        },
+
+        // 检查视频播放状态，如暂停则继续播放
+        checkPlayState() {
+            // 如果挂机模式未开启，则不执行
+            if (!ConfigManager.get('hangupModeEnabled')) return;
+
+            try {
+                const videos = document.querySelectorAll('video');
+                videos.forEach(video => {
+                    // 确保视频已加载且处于暂停状态
+                    if (video.readyState > 0 && video.paused) {
+                        console.log('挂机模式：检测到视频暂停，自动继续播放');
+                        video.play().catch(e => {
+                            console.log('挂机模式：自动播放失败，尝试其他方式', e);
+                            // 尝试通过点击播放按钮
+                            this.clickPlayButton();
+                        });
+                    }
+
+                    // 确保音量为0
+                    if (video.volume !== 0) {
+                        video.volume = 0;
+                        console.log('挂机模式：已将音量设置为0');
+                    }
+                });
+            } catch (error) {
+                console.error('挂机模式检查播放状态出错:', error);
+            }
+        },
+
+        // 尝试点击页面上的播放按钮
+        clickPlayButton() {
+            try {
+                // 尝试常见的播放按钮选择器
+                const playButtons = document.querySelectorAll(
+                    '.play-button, .video-play-btn, .icon-play, [class*="play"]'
+                );
+
+                playButtons.forEach(button => {
+                    if (button && !button.disabled) {
+                        const clickEvent = new MouseEvent('click', {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window
+                        });
+                        button.dispatchEvent(clickEvent);
+                        console.log('挂机模式：已尝试点击播放按钮');
+                    }
+                });
+            } catch (error) {
+                console.error('挂机模式点击播放按钮出错:', error);
+            }
+        },
+
+        // 检查当前视频科目，如果是需要跳过的科目则跳过
+        checkAndSkipSubjectVideos() {
+            // 如果挂机模式未开启，则不执行
+            if (!ConfigManager.get('hangupModeEnabled')) return;
+
+            try {
+                const currentSubject = Stats.data.currentSubject;
+                const videoListContainer = document.querySelector('.listCon-N9Rlm');
+
+                if (!videoListContainer || currentSubject === '未播放' || currentSubject === '未知科目') {
+                    return;
+                }
+
+                // 检查当前科目是否在需要跳过的列表中
+                if (Config.hangupSkipSubjects.includes(currentSubject)) {
+                    console.log(`挂机模式：检测到${currentSubject}视频，准备跳过`);
+
+                    // 获取当前正在播放的视频项
+                    const activeVideo = videoListContainer.querySelector('.item-IPNWw.active-1MWMf');
+                    if (!activeVideo) return;
+
+                    // 查找下一个视频
+                    let nextVideo = activeVideo.nextElementSibling;
+                    while (nextVideo) {
+                        if (nextVideo.classList.contains('item-IPNWw')) {
+                            // 触发点击事件，跳转到下一个视频
+                            const clickEvent = new MouseEvent('click', {
+                                bubbles: true,
+                                cancelable: true,
+                                view: window
+                            });
+                            nextVideo.dispatchEvent(clickEvent);
+
+                            // 更新跳过视频计数（不显示）
+                            Stats.data.skippedVideoCount++;
+
+                            // 播放提示音
+                            Utils.playSound('skip');
+
+                            console.log(`挂机模式：已跳过${currentSubject}视频`);
+                            return;
+                        }
+                        nextVideo = nextVideo.nextElementSibling;
+                    }
+                }
+            } catch (error) {
+                console.error('挂机模式跳过视频出错:', error);
+            }
+        },
+
+        // 激活挂机模式
+        activate() {
+            // 保存当前功能状态
+            const currentSettings = {
+                speed: SpeedControl.currentSpeed,
+                autoCheckEnabled: ConfigManager.get('autoCheckEnabled'),
+                autoPlayEnabled: ConfigManager.get('autoPlayEnabled'),
+                autoSkipEnabled: ConfigManager.get('autoSkipEnabled'),
+                speedControlEnabled: ConfigManager.get('speedControlEnabled')
+            };
+
+            // 保存当前音量
+            const videos = document.querySelectorAll('video');
+            if (videos.length > 0) {
+                this.lastVolume = videos[0].volume;
+                ConfigManager.update('lastVolume', this.lastVolume);
+            }
+
+            // 存储当前设置，用于退出挂机模式时恢复
+            localStorage.setItem('ewtPreHangupSettings', JSON.stringify(currentSettings));
+
+            // 应用挂机模式设置
+            SpeedControl.activateHangupMode();
+            ConfigManager.update('autoCheckEnabled', true);
+            ConfigManager.update('autoPlayEnabled', true);
+            ConfigManager.update('autoSkipEnabled', true);
+            ConfigManager.update('speedControlEnabled', false); // 倍速功能关闭
+
+            // 更新功能状态
+            AutoCheck.start();
+            AutoPlay.start();
+            AutoSkip.start();
+            SpeedControl.disableSpeedControl(); // 禁用倍速控制，实际强制1x
+
+            // 强制设置所有视频音量为0
+            videos.forEach(video => {
+                video.volume = 0;
+            });
+
+            // 启动挂机模式检查
+            this.start();
+
+            console.log('挂机模式已激活');
+        },
+
+        // 停用挂机模式，恢复之前的设置
+        deactivate() {
+            // 停止挂机模式检查
+            this.stop();
+
+            // 恢复之前的设置
+            try {
+                const preHangupSettings = JSON.parse(localStorage.getItem('ewtPreHangupSettings'));
+                if (preHangupSettings) {
+                    // 恢复倍速
+                    SpeedControl.deactivateHangupMode();
+
+                    // 恢复各功能开关状态
+                    ConfigManager.update('autoCheckEnabled', preHangupSettings.autoCheckEnabled);
+                    ConfigManager.update('autoPlayEnabled', preHangupSettings.autoPlayEnabled);
+                    ConfigManager.update('autoSkipEnabled', preHangupSettings.autoSkipEnabled);
+                    ConfigManager.update('speedControlEnabled', preHangupSettings.speedControlEnabled);
+
+                    // 更新功能状态
+                    if (preHangupSettings.autoCheckEnabled) {
+                        AutoCheck.start();
+                    } else {
+                        AutoCheck.stop();
+                    }
+
+                    if (preHangupSettings.autoPlayEnabled) {
+                        AutoPlay.start();
+                    } else {
+                        AutoPlay.stop();
+                    }
+
+                    if (preHangupSettings.autoSkipEnabled) {
+                        AutoSkip.start();
+                    } else {
+                        AutoSkip.stop();
+                    }
+
+                    if (preHangupSettings.speedControlEnabled) {
+                        SpeedControl.enableSpeedControl();
+                    } else {
+                        SpeedControl.disableSpeedControl();
+                    }
+                }
+
+                // 恢复音量
+                const lastVolume = ConfigManager.get('lastVolume');
+                const videos = document.querySelectorAll('video');
+                videos.forEach(video => {
+                    video.volume = lastVolume;
+                });
+                console.log(`已恢复音量至 ${lastVolume}`);
+            } catch (e) {
+                console.warn('恢复挂机前设置失败:', e);
+            }
+
+            console.log('挂机模式已停用');
+        },
+
+        // 切换挂机模式状态
+        toggle(isEnabled) {
+            ConfigManager.update('hangupModeEnabled', isEnabled);
+
+            if (isEnabled) {
+                this.activate();
+            } else {
+                this.deactivate();
+            }
+
+            // 更新UI按钮状态
+            const hangupButton = document.getElementById('hangupButton');
+            if (hangupButton) {
+                hangupButton.textContent = `挂机: ${isEnabled ? '开' : '关'}`;
+                hangupButton.style.backgroundColor = isEnabled ? '#FF9800' : '#f44336';
+            }
+
+            // 更新其他按钮状态（在挂机模式下禁用修改）
+            this.updateOtherButtonsState(isEnabled);
+        },
+
+        // 更新其他按钮的状态（在挂机模式下禁用）
+        updateOtherButtonsState(isHangupMode) {
+            const buttons = [
+                document.querySelector('[textContent="过检: 开"], [textContent="过检: 关"]'),
+                document.querySelector('[textContent="连播: 开"], [textContent="连播: 关"]'),
+                document.querySelector('[textContent="跳题: 开"], [textContent="跳题: 关"]'),
+                document.querySelector('[textContent="倍速: 开"], [textContent="倍速: 关"]'),
+                document.getElementById('speedUp'),
+                document.getElementById('speedDown')
+            ];
+
+            buttons.forEach(button => {
+                if (button) {
+                    if (isHangupMode) {
+                        button.disabled = true;
+                        button.style.opacity = '0.6';
+                        button.style.cursor = 'not-allowed';
+                    } else {
+                        button.disabled = false;
+                        button.style.opacity = '1';
+                        button.style.cursor = 'pointer';
+                    }
+                }
+            });
         }
     };
 
@@ -357,8 +856,15 @@
             this.panel = panel;
             document.body.appendChild(panel);
 
-            // 应用当前模式
+            // 应用当前模式和倍速控制状态
             ModeControl.applyMode();
+            SpeedControl.updateSpeedControlUI();
+
+            // 检查挂机模式状态并更新按钮
+            const isHangupMode = ConfigManager.get('hangupModeEnabled');
+            HangupMode.updateOtherButtonsState(isHangupMode);
+
+            return panel;
         },
 
         createStatsArea() {
@@ -409,14 +915,31 @@
             buttonsDiv.style.paddingLeft = '10px';
             buttonsDiv.style.borderLeft = '1px solid rgba(255, 255, 255, 0.3)';
 
-            // 添加模式切换按钮
+            // 模式切换按钮
             const modeButton = this.createModeButton();
             buttonsDiv.appendChild(modeButton);
+
+            // 挂机模式按钮
+            buttonsDiv.appendChild(this.createHangupButton());
+
+            // 倍速功能开关按钮
+            buttonsDiv.appendChild(this.createFunctionButton(
+                '倍速',
+                ConfigManager.get('speedControlEnabled'),
+                (isEnabled) => {
+                    SpeedControl.toggle(isEnabled);
+                    // 同步更新模式显示
+                    ModeControl.applyMode();
+                }
+            ));
 
             buttonsDiv.appendChild(this.createFunctionButton(
                 '过检',
                 ConfigManager.get('autoCheckEnabled'),
                 (isEnabled) => {
+                    // 如果在挂机模式下，不允许修改
+                    if (ConfigManager.get('hangupModeEnabled')) return;
+
                     AutoCheck.toggle(isEnabled);
                     ConfigManager.update('autoCheckEnabled', isEnabled);
                 }
@@ -425,6 +948,9 @@
                 '连播',
                 ConfigManager.get('autoPlayEnabled'),
                 (isEnabled) => {
+                    // 如果在挂机模式下，不允许修改
+                    if (ConfigManager.get('hangupModeEnabled')) return;
+
                     AutoPlay.toggle(isEnabled);
                     ConfigManager.update('autoPlayEnabled', isEnabled);
                 }
@@ -433,6 +959,9 @@
                 '跳题',
                 ConfigManager.get('autoSkipEnabled'),
                 (isEnabled) => {
+                    // 如果在挂机模式下，不允许修改
+                    if (ConfigManager.get('hangupModeEnabled')) return;
+
                     AutoSkip.toggle(isEnabled);
                     ConfigManager.update('autoSkipEnabled', isEnabled);
                 }
@@ -441,9 +970,31 @@
             return buttonsDiv;
         },
 
-        /**
-         * 创建模式切换按钮
-         */
+        // 创建挂机模式按钮
+        createHangupButton() {
+            const button = document.createElement('button');
+            button.id = 'hangupButton';
+            const isEnabled = ConfigManager.get('hangupModeEnabled');
+
+            button.textContent = `挂机: ${isEnabled ? '开' : '关'}`;
+            button.style.padding = '3px 8px';
+            button.style.color = 'white';
+            button.style.border = 'none';
+            button.style.borderRadius = '12px';
+            button.style.cursor = 'pointer';
+            button.style.fontSize = '12px';
+            button.style.transition = 'background-color 0.2s';
+            button.style.backgroundColor = isEnabled ? '#FF9800' : '#f44336';
+
+            button.addEventListener('click', () => {
+                const newState = !ConfigManager.get('hangupModeEnabled');
+                HangupMode.toggle(newState);
+                ConfigManager.update('hangupModeEnabled', newState);
+            });
+
+            return button;
+        },
+
         createModeButton() {
             const button = document.createElement('button');
             button.id = 'modeToggleButton';
@@ -610,6 +1161,9 @@
                         Stats.data.videoPlayCount++;
                         Stats.updateDisplay();
 
+                        // 视频切换后立即更新科目信息
+                        SubjectInfo.checkCurrentSubject();
+
                         Utils.playSound('next');
                         return;
                     }
@@ -766,11 +1320,12 @@
             ModeControl.init();
             UI.createControlPanel();
 
-            // 初始化倍速为保存的值并启用防干扰
+            // 初始化防干扰和倍速控制
             AntiInterference.init();
-            SpeedControl.setSpeed(ConfigManager.get('speed'));
-            // 启动倍速自动重应用
             SpeedControl.init();
+
+            // 启动科目信息检查（内部使用，不显示）
+            SubjectInfo.start();
 
             // 根据保存的配置状态启动各功能
             if (ConfigManager.get('autoCheckEnabled')) {
@@ -781,6 +1336,13 @@
             }
             if (ConfigManager.get('autoSkipEnabled')) {
                 AutoSkip.start();
+            }
+
+            // 如果挂机模式是开启状态，则激活挂机模式
+            if (ConfigManager.get('hangupModeEnabled')) {
+                HangupMode.activate();
+            } else {
+                HangupMode.stop();
             }
 
             this.runTimeIntervalId = setInterval(() => {
@@ -794,9 +1356,11 @@
             AutoCheck.stop();
             AutoPlay.stop();
             AutoSkip.stop();
+            SubjectInfo.stop();
+            HangupMode.stop(); // 停止挂机模式
 
-            // 停止倍速自动重应用
-            SpeedControl.stop();
+            // 停止倍速自动重应用并恢复原始控制
+            SpeedControl.disableSpeedControl();
 
             if (this.runTimeIntervalId) {
                 clearInterval(this.runTimeIntervalId);
