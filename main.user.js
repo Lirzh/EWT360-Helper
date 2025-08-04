@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         升学E网通助手（增强版）
 // @namespace    https://www.yuzu-soft.com/products.html
-// @version      1.4.0
-// @description  自动通过随机检查、自动播放下一视频、自动跳题（仅作业页面生效），支持1x至16x倍速调节，倍速自动维持，新增模式切换功能，优化挂机模式
+// @version      1.5.0
+// @description  自动通过随机检查、自动播放下一视频、自动跳题（仅作业页面生效），支持1x至16x倍速调节，倍速自动维持，新增模式切换功能，优化挂机模式，支持自定义跳过科目
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @author       仅供学习交流，严禁用于商业用途，请于24小时内删除
+// @icon         https://www.ewt360.com/favicon.ico
 // @grant        none
 // 此脚本完全免费，倒卖的人绝对私募了XD
 // ==/UserScript==
@@ -25,7 +26,9 @@
             speedControlEnabled: true, // 倍速功能是否启用
             mode: 'normal',
             hangupModeEnabled: false, // 挂机模式状态
-            lastVolume: 1 // 保存最后一次音量设置
+            lastVolume: 1, // 保存最后一次音量设置
+            hangupSkipSubjects: [],
+            showSpeedWarning: true // 是否显示倍速提醒
         },
 
         // 当前配置
@@ -90,8 +93,8 @@
         panelHoverOpacity: 1.0,   // hover时透明度
         // 目标路径匹配规则
         targetHashPath: '#/homework/', // 作业页面哈希路径前缀
-        // 挂机模式需要跳过的科目列表
-        hangupSkipSubjects: ['语文', '英语', '数学', '历史', '政治', '生物', '地理', '物理', '化学']
+        // 所有可能的科目列表（用于设置弹窗）
+        allSubjects: ['语文', '英语', '数学', '历史', '政治', '生物', '地理', '物理', '化学', '信息技术', '通用技术', '音乐', '美术', '体育', '科学', '品德', '综合实践']
     };
 
     /**
@@ -387,6 +390,11 @@
             if (ConfigManager.get('hangupModeEnabled')) return;
 
             if (!this.isEnabled) return;
+            
+            // 如果不是1x倍速且需要显示提醒
+            if (speed !== 1 && ConfigManager.get('showSpeedWarning')) {
+                this.showSpeedWarning();
+            }
 
             try {
                 const videos = document.querySelectorAll('video');
@@ -404,6 +412,56 @@
             } catch (error) {
                 console.error('设置倍速失败:', error);
             }
+        },
+        
+        // 显示倍速提醒弹窗
+        showSpeedWarning() {
+            // 检查是否已有弹窗，避免重复显示
+            if (document.getElementById('speedWarningDialog')) return;
+            
+            const dialog = document.createElement('div');
+            dialog.id = 'speedWarningDialog';
+            dialog.style.position = 'fixed';
+            dialog.style.top = '50%';
+            dialog.style.left = '50%';
+            dialog.style.transform = 'translate(-50%, -50%)';
+            dialog.style.backgroundColor = 'white';
+            dialog.style.borderRadius = '8px';
+            dialog.style.boxShadow = '0 4px 20px rgba(0, 0, 0, 0.2)';
+            dialog.style.padding = '20px';
+            dialog.style.zIndex = '10000';
+            dialog.style.width = '300px';
+            
+            dialog.innerHTML = `
+                <div style="margin-bottom: 15px; color: #333; font-weight: bold; font-size: 16px;">提示</div>
+                <div style="margin-bottom: 15px; color: #666; font-size: 14px;">倍速播放可能不计入有效看课时长</div>
+                <div style="display: flex; align-items: center; margin-bottom: 20px;">
+                    <input type="checkbox" id="dontShowAgain" style="margin-right: 8px;">
+                    <label for="dontShowAgain" style="color: #666; font-size: 13px;">不再提醒</label>
+                </div>
+                <div style="text-align: right;">
+                    <button id="closeWarning" style="padding: 6px 15px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">知道了</button>
+                </div>
+            `;
+            
+            document.body.appendChild(dialog);
+            
+            // 添加关闭按钮事件
+            dialog.querySelector('#closeWarning').addEventListener('click', () => {
+                // 检查是否勾选了不再提醒
+                const dontShowAgain = dialog.querySelector('#dontShowAgain').checked;
+                if (dontShowAgain) {
+                    ConfigManager.update('showSpeedWarning', false);
+                }
+                dialog.remove();
+            });
+            
+            // 点击外部关闭
+            dialog.addEventListener('click', (e) => {
+                if (e.target === dialog) {
+                    dialog.remove();
+                }
+            });
         },
 
         nextSpeed() {
@@ -623,13 +681,14 @@
             try {
                 const currentSubject = Stats.data.currentSubject;
                 const videoListContainer = document.querySelector('.listCon-N9Rlm');
+                const skipSubjects = ConfigManager.get('hangupSkipSubjects');
 
                 if (!videoListContainer || currentSubject === '未播放' || currentSubject === '未知科目') {
                     return;
                 }
 
                 // 检查当前科目是否在需要跳过的列表中
-                if (Config.hangupSkipSubjects.includes(currentSubject)) {
+                if (skipSubjects.includes(currentSubject)) {
                     console.log(`挂机模式：检测到${currentSubject}视频，准备跳过`);
 
                     // 获取当前正在播放的视频项
@@ -663,6 +722,108 @@
             } catch (error) {
                 console.error('挂机模式跳过视频出错:', error);
             }
+        },
+        
+        // 打开科目设置弹窗
+        openSubjectSettings() {
+            // 检查是否已有弹窗，避免重复显示
+            if (document.getElementById('subjectSettingsDialog')) return;
+            
+            const dialog = document.createElement('div');
+            dialog.id = 'subjectSettingsDialog';
+            dialog.style.position = 'fixed';
+            dialog.style.top = '50%';
+            dialog.style.left = '50%';
+            dialog.style.transform = 'translate(-50%, -50%)';
+            dialog.style.backgroundColor = 'white';
+            dialog.style.borderRadius = '8px';
+            dialog.style.boxShadow = '0 4px 20px rgba(0, 0, 0, 0.2)';
+            dialog.style.padding = '20px';
+            dialog.style.zIndex = '10000';
+            dialog.style.width = '400px';
+            dialog.style.maxHeight = '70vh';
+            dialog.style.overflowY = 'auto';
+            
+            // 获取当前跳过的科目列表
+            const skipSubjects = ConfigManager.get('hangupSkipSubjects');
+            
+            // 构建科目复选框列表
+            let subjectsHtml = '';
+            Config.allSubjects.forEach(subject => {
+                const isChecked = skipSubjects.includes(subject);
+                subjectsHtml += `
+                    <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                        <input type="checkbox" id="subject-${subject}" value="${subject}" ${isChecked ? 'checked' : ''} style="margin-right: 8px;">
+                        <label for="subject-${subject}" style="color: #333; font-size: 14px;">${subject}</label>
+                    </div>
+                `;
+            });
+            
+            dialog.innerHTML = `
+                <div style="margin-bottom: 15px; color: #333; font-weight: bold; font-size: 16px;">设置跳过科目</div>
+                <div style="margin-bottom: 20px; color: #666; font-size: 13px;">勾选需要在挂机模式下自动跳过的科目</div>
+                <div class="subjects-container">
+                    ${subjectsHtml}
+                </div>
+                <div style="margin-top: 20px; text-align: right;">
+                    <button id="cancelSubjectSettings" style="padding: 6px 15px; background-color: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;">取消</button>
+                    <button id="saveSubjectSettings" style="padding: 6px 15px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">保存设置</button>
+                </div>
+            `;
+            
+            document.body.appendChild(dialog);
+            
+            // 添加保存按钮事件
+            dialog.querySelector('#saveSubjectSettings').addEventListener('click', () => {
+                const checkedSubjects = [];
+                dialog.querySelectorAll('input[type="checkbox"]:checked').forEach(checkbox => {
+                    checkedSubjects.push(checkbox.value);
+                });
+                
+                // 保存设置
+                ConfigManager.update('hangupSkipSubjects', checkedSubjects);
+                dialog.remove();
+                
+                // 显示保存成功提示
+                this.showSettingsSavedMessage();
+            });
+            
+            // 添加取消按钮事件
+            dialog.querySelector('#cancelSubjectSettings').addEventListener('click', () => {
+                dialog.remove();
+            });
+            
+            // 点击外部关闭
+            dialog.addEventListener('click', (e) => {
+                if (e.target === dialog) {
+                    dialog.remove();
+                }
+            });
+        },
+        
+        // 显示设置保存成功提示
+        showSettingsSavedMessage() {
+            const message = document.createElement('div');
+            message.style.position = 'fixed';
+            message.style.bottom = '20px';
+            message.style.left = '50%';
+            message.style.transform = 'translateX(-50%)';
+            message.style.backgroundColor = 'rgba(76, 175, 80, 0.9)';
+            message.style.color = 'white';
+            message.style.padding = '10px 20px';
+            message.style.borderRadius = '4px';
+            message.style.zIndex = '10001';
+            message.style.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.2)';
+            message.textContent = '科目设置已保存';
+            
+            document.body.appendChild(message);
+            
+            // 3秒后自动消失
+            setTimeout(() => {
+                message.style.opacity = '0';
+                message.style.transition = 'opacity 0.5s';
+                setTimeout(() => message.remove(), 500);
+            }, 3000);
         },
 
         // 激活挂机模式
@@ -797,7 +958,8 @@
                 document.querySelector('[textContent="跳题: 开"], [textContent="跳题: 关"]'),
                 document.querySelector('[textContent="倍速: 开"], [textContent="倍速: 关"]'),
                 document.getElementById('speedUp'),
-                document.getElementById('speedDown')
+                document.getElementById('speedDown'),
+                document.getElementById('subjectSettingsButton')
             ];
 
             buttons.forEach(button => {
@@ -919,6 +1081,9 @@
             const modeButton = this.createModeButton();
             buttonsDiv.appendChild(modeButton);
 
+            // 科目设置按钮
+            buttonsDiv.appendChild(this.createSubjectSettingsButton());
+
             // 挂机模式按钮
             buttonsDiv.appendChild(this.createHangupButton());
 
@@ -968,6 +1133,28 @@
             ));
 
             return buttonsDiv;
+        },
+        
+        // 创建科目设置按钮
+        createSubjectSettingsButton() {
+            const button = document.createElement('button');
+            button.id = 'subjectSettingsButton';
+            button.textContent = '科目设置';
+
+            button.style.padding = '3px 8px';
+            button.style.color = 'white';
+            button.style.border = 'none';
+            button.style.borderRadius = '12px';
+            button.style.cursor = 'pointer';
+            button.style.fontSize = '12px';
+            button.style.transition = 'background-color 0.2s';
+            button.style.backgroundColor = '#3266FF';
+
+            button.addEventListener('click', () => {
+                HangupMode.openSubjectSettings();
+            });
+
+            return button;
         },
 
         // 创建挂机模式按钮
