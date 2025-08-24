@@ -1,8 +1,8 @@
 # EWT360 Helper
 
 升学E网通360的强大插件
-![pic0](./image/ewt_screen_shot_0.png)
-![pic2](./image/ewt_screen_shot_1.png)
+![pic1](./image/ewt_1.png)
+![pic2](./image/ewt_2.png)
 
 ## 简介
 
