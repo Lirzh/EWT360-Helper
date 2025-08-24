@@ -1,17 +1,27 @@
 // ==UserScript==
-// @name         升学E网通助手（增强版）
-// @namespace    https://www.yuzu-soft.com/products.html
-// @version      1.5.0
-// @description  自动通过随机检查、自动播放下一视频、自动跳题（仅作业页面生效），支持1x至16x倍速调节，倍速自动维持，新增模式切换功能，优化挂机模式，支持自定义跳过科目
+// @name         升学E网通助手
+// @namespace    https://github.com/ZNink/EWT360-Helper
+// @version      1.7.0
+// @description  自动通过随机检查、自动播放下一视频、自动跳题（仅作业页面生效）、1x至16x倍速调节、挂机模式、自定义跳过科目、小屏设备适配
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
-// @author       仅供学习交流，严禁用于商业用途，请于24小时内删除
+// @author       ZNink & Lirzh
 // @icon         https://www.ewt360.com/favicon.ico
 // @grant        none
-// 此脚本完全免费，倒卖的人绝对私募了XD
+// @updateURL    https://raw.githubusercontent.com/ZNink/EWT360-Helper/main/main.user.js
+// @downloadURL  https://raw.githubusercontent.com/ZNink/EWT360-Helper/main/main.user.js
+// @supportURL   https://github.com/ZNink/EWT360-Helper/issues
 // ==/UserScript==
 
 (function() {
     'use strict';
+
+    function debounce(fn, delay) {
+        let timeout;
+        return function(...args) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => fn(...args), delay);
+        };
+    }
 
     /**
      * 配置管理模块 - 处理配置的加载和保存
@@ -19,18 +29,19 @@
     const ConfigManager = {
         // 默认配置
         defaultConfig: {
-                speed: 1,
-                autoCheckEnabled: true,
-                autoPlayEnabled: true,
-                autoSkipEnabled: true,
-                speedControlEnabled: true, // 倍速功能是否启用
-                mode: 'normal',
-                hangupModeEnabled: false, // 挂机模式状态
-                lastVolume: 1, // 保存最后一次音量设置
-                hangupSkipSubjects: [],
-                showSpeedWarning: true, // 是否显示倍速提醒
-                soundEnabled: true // 是否播放提示音
-            },
+            speed: 1,
+            autoCheckEnabled: true,
+            autoPlayEnabled: true,
+            autoSkipEnabled: true,
+            speedControlEnabled: true, // 倍速功能是否启用
+            hangupModeEnabled: false, // 挂机模式状态
+            lastVolume: 1, // 保存最后一次音量设置
+            hangupSkipSubjects: [],
+            showSpeedWarning: true, // 是否显示倍速提醒
+            soundEnabled: true, // 是否播放提示音
+            sidebarPosition: null,
+            sidebarShrunk: false
+        },
 
         // 当前配置
         config: {},
@@ -63,7 +74,7 @@
 
         // 更新特定配置项
         update(key, value) {
-            if (Object.keys(this.defaultConfig).includes(key)) {
+            if (Object.keys(this.defaultConfig).includes(key) || key === 'sidebarPosition') {
                 this.config[key] = value;
                 this.save();
             } else {
@@ -74,6 +85,13 @@
         // 获取配置
         get(key) {
             return this.config[key];
+        },
+
+        // 重置配置到默认
+        reset() {
+            this.config = { ...this.defaultConfig };
+            this.save();
+            localStorage.removeItem('ewtPreHangupSettings');
         }
     };
 
@@ -95,7 +113,7 @@
         // 目标路径匹配规则
         targetHashPath: '#/homework/', // 作业页面哈希路径前缀
         // 所有可能的科目列表（用于设置弹窗）
-        allSubjects: ['语文', '英语', '数学', '历史', '政治', '生物', '地理', '物理', '化学', '信息技术', '通用技术', '音乐', '美术', '体育', '科学', '品德', '综合实践']
+        allSubjects: ['语文', '英语', '数学', '历史', '政治', '生物', '地理', '物理', '化学', '信息技术', '通用技术', '音乐', '美术', '体育', '科学', '品德']
     };
 
     /**
@@ -112,11 +130,25 @@
             currentSubject: '未播放' // 当前播放视频的科目（不显示）
         },
 
+        boundElements: {
+            videoPlayCount: [],
+            totalCheckCount: [],
+            skippedQuestionCount: [],
+            runTime: []
+        },
+
+        bindElement(key, element) {
+            if (this.boundElements[key]) {
+                this.boundElements[key].push(element);
+            }
+        },
+
         updateDisplay() {
-            document.getElementById('videoCount').textContent = this.data.videoPlayCount;
-            document.getElementById('totalCheckCount').textContent = this.data.totalCheckCount;
-            document.getElementById('skippedQuestionCount').textContent = this.data.skippedQuestionCount;
-            document.getElementById('runTime').textContent = this.data.runTime;
+            Object.keys(this.boundElements).forEach(key => {
+                this.boundElements[key].forEach(el => {
+                    if (el) el.textContent = this.data[key];
+                });
+            });
         },
 
         updateRunTime() {
@@ -264,12 +296,23 @@
      * 倍速控制模块
      */
     const SpeedControl = {
-        speeds: [1, 1.25, 1.5, 1.75, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16],
+        speeds: [0.1, 0.25, 0.5, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16],
         currentSpeed: 1,
         reapplyIntervalId: null,
         isEnabled: true,
         // 保存挂机模式激活前的倍速设置
         preHangupSpeed: 1,
+        boundSpeedDisplays: [],
+
+        bindSpeedDisplay(element) {
+            this.boundSpeedDisplays.push(element);
+        },
+
+        updateSpeedDisplay() {
+            this.boundSpeedDisplays.forEach(el => {
+                if (el) el.textContent = `${this.currentSpeed}x`;
+            });
+        },
 
         init() {
             // 从配置加载保存的倍速和开关状态
@@ -325,6 +368,7 @@
             ConfigManager.update('speedControlEnabled', isEnabled);
             // 更新UI
             this.updateSpeedControlUI();
+            UIHelpers.updateUIStates();
         },
 
         // 启用倍速控制
@@ -361,10 +405,9 @@
 
         // 更新倍速控制UI显示
         updateSpeedControlUI() {
-            const speedControlArea = document.getElementById('speedControlArea');
-            if (speedControlArea) {
-                speedControlArea.style.display = this.isEnabled ? 'flex' : 'none';
-            }
+            document.querySelectorAll('#speedControlArea').forEach(area => {
+                if (area) area.style.display = this.isEnabled ? 'flex' : 'none';
+            });
         },
 
         reapplySpeed() {
@@ -391,7 +434,7 @@
             if (ConfigManager.get('hangupModeEnabled')) return;
 
             if (!this.isEnabled) return;
-            
+
             // 如果不是1x倍速且需要显示提醒
             if (speed !== 1 && ConfigManager.get('showSpeedWarning')) {
                 this.showSpeedWarning();
@@ -406,20 +449,17 @@
                 this.preHangupSpeed = speed; // 更新挂机前的速度
                 // 保存倍速到配置
                 ConfigManager.update('speed', speed);
-                const speedDisplay = document.getElementById('speedDisplay');
-                if (speedDisplay) {
-                    speedDisplay.textContent = `${speed}x`;
-                }
+                this.updateSpeedDisplay();
             } catch (error) {
                 console.error('设置倍速失败:', error);
             }
         },
-        
+
         // 显示倍速提醒弹窗
         showSpeedWarning() {
             // 检查是否已有弹窗，避免重复显示
             if (document.getElementById('speedWarningDialog')) return;
-            
+
             const dialog = document.createElement('div');
             dialog.id = 'speedWarningDialog';
             dialog.style.position = 'fixed';
@@ -432,21 +472,21 @@
             dialog.style.padding = '20px';
             dialog.style.zIndex = '10000';
             dialog.style.width = '300px';
-            
+
             dialog.innerHTML = `
                 <div style="margin-bottom: 15px; color: #333; font-weight: bold; font-size: 16px;">提示</div>
-                <div style="margin-bottom: 15px; color: #666; font-size: 14px;">倍速播放可能不计入有效看课时长</div>
+                <div style="margin-bottom: 15px; color: #666; font-size: 14px;">倍速播放可能不计入有效看课时长,请勿重复汇报issue!</div>
                 <div style="display: flex; align-items: center; margin-bottom: 20px;">
                     <input type="checkbox" id="dontShowAgain" style="margin-right: 8px;">
                     <label for="dontShowAgain" style="color: #666; font-size: 13px;">不再提醒</label>
                 </div>
                 <div style="text-align: right;">
-                    <button id="closeWarning" style="padding: 6px 15px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">知道了</button>
+                    <button id="closeWarning" style="padding: 6px 15px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">确定</button>
                 </div>
             `;
-            
+
             document.body.appendChild(dialog);
-            
+
             // 添加关闭按钮事件
             dialog.querySelector('#closeWarning').addEventListener('click', () => {
                 // 检查是否勾选了不再提醒
@@ -456,7 +496,7 @@
                 }
                 dialog.remove();
             });
-            
+
             // 点击外部关闭
             dialog.addEventListener('click', (e) => {
                 if (e.target === dialog) {
@@ -496,45 +536,6 @@
         // 挂机模式关闭时调用，恢复之前的速度
         deactivateHangupMode() {
             this.setSpeed(this.preHangupSpeed);
-        }
-    };
-
-    /**
-     * 模式控制模块 - 管理不同显示模式
-     */
-    const ModeControl = {
-        currentMode: 'normal',
-
-        init() {
-            this.currentMode = ConfigManager.get('mode');
-            this.applyMode();
-        },
-
-        toggleMode() {
-            this.currentMode = this.currentMode === 'normal' ? 'minimal' : 'normal';
-            ConfigManager.update('mode', this.currentMode);
-            this.applyMode();
-        },
-
-        applyMode() {
-            const statsArea = document.getElementById('statsArea');
-            const speedControlArea = document.getElementById('speedControlArea');
-            const modeButton = document.getElementById('modeToggleButton');
-
-            if (this.currentMode === 'minimal') {
-                // 极简模式: 隐藏统计信息
-                if (statsArea) statsArea.style.display = 'none';
-                if (modeButton) modeButton.textContent = '极简';
-            } else {
-                // 普通模式: 显示统计信息
-                if (statsArea) statsArea.style.display = 'flex';
-                if (modeButton) modeButton.textContent = '普通';
-            }
-
-            // 确保倍速控制区显示状态受SpeedControl控制
-            if (speedControlArea) {
-                speedControlArea.style.display = SpeedControl.isEnabled ? 'flex' : 'none';
-            }
         }
     };
 
@@ -724,12 +725,12 @@
                 console.error('挂机模式跳过视频出错:', error);
             }
         },
-        
+
         // 打开科目设置弹窗
         openSubjectSettings() {
             // 检查是否已有弹窗，避免重复显示
             if (document.getElementById('subjectSettingsDialog')) return;
-            
+
             const dialog = document.createElement('div');
             dialog.id = 'subjectSettingsDialog';
             dialog.style.position = 'fixed';
@@ -744,10 +745,10 @@
             dialog.style.width = '400px';
             dialog.style.maxHeight = '70vh';
             dialog.style.overflowY = 'auto';
-            
+
             // 获取当前跳过的科目列表
             const skipSubjects = ConfigManager.get('hangupSkipSubjects');
-            
+
             // 构建科目复选框列表
             let subjectsHtml = '';
             Config.allSubjects.forEach(subject => {
@@ -759,7 +760,7 @@
                     </div>
                 `;
             });
-            
+
             dialog.innerHTML = `
                 <div style="margin-bottom: 15px; color: #333; font-weight: bold; font-size: 16px;">设置跳过科目</div>
                 <div style="margin-bottom: 20px; color: #666; font-size: 13px;">勾选需要在挂机模式下自动跳过的科目</div>
@@ -771,29 +772,29 @@
                     <button id="saveSubjectSettings" style="padding: 6px 15px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">保存设置</button>
                 </div>
             `;
-            
+
             document.body.appendChild(dialog);
-            
+
             // 添加保存按钮事件
             dialog.querySelector('#saveSubjectSettings').addEventListener('click', () => {
                 const checkedSubjects = [];
                 dialog.querySelectorAll('input[type="checkbox"]:checked').forEach(checkbox => {
                     checkedSubjects.push(checkbox.value);
                 });
-                
+
                 // 保存设置
                 ConfigManager.update('hangupSkipSubjects', checkedSubjects);
                 dialog.remove();
-                
+
                 // 显示保存成功提示
                 this.showSettingsSavedMessage();
             });
-            
+
             // 添加取消按钮事件
             dialog.querySelector('#cancelSubjectSettings').addEventListener('click', () => {
                 dialog.remove();
             });
-            
+
             // 点击外部关闭
             dialog.addEventListener('click', (e) => {
                 if (e.target === dialog) {
@@ -801,7 +802,7 @@
                 }
             });
         },
-        
+
         // 显示设置保存成功提示
         showSettingsSavedMessage() {
             const message = document.createElement('div');
@@ -816,9 +817,9 @@
             message.style.zIndex = '10001';
             message.style.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.2)';
             message.textContent = '科目设置已保存';
-            
+
             document.body.appendChild(message);
-            
+
             // 3秒后自动消失
             setTimeout(() => {
                 message.style.opacity = '0';
@@ -936,321 +937,779 @@
         // 切换挂机模式状态
         toggle(isEnabled) {
             ConfigManager.update('hangupModeEnabled', isEnabled);
-
             if (isEnabled) {
                 this.activate();
             } else {
-                this.deactivate();
+                this.deactivate(); // ✅ 必须改成这样
             }
 
-            // 更新UI按钮状态
-            const hangupButton = document.getElementById('hangupButton');
-            if (hangupButton) {
-                hangupButton.textContent = `挂机: ${isEnabled ? '开' : '关'}`;
-                hangupButton.style.backgroundColor = isEnabled ? '#FF9800' : '#f44336';
-            }
-
-            // 更新其他按钮状态（在挂机模式下禁用修改）
+            // 更新UI
+            UIHelpers.updateUIStates();
             this.updateOtherButtonsState(isEnabled);
         },
 
         // 更新其他按钮的状态（在挂机模式下禁用）
         updateOtherButtonsState(isHangupMode) {
-            const buttons = [
-                document.querySelector('[textContent="过检: 开"], [textContent="过检: 关"]'),
-                document.querySelector('[textContent="连播: 开"], [textContent="连播: 关"]'),
-                document.querySelector('[textContent="跳题: 开"], [textContent="跳题: 关"]'),
-                document.querySelector('[textContent="倍速: 开"], [textContent="倍速: 关"]'),
-                document.querySelector('[textContent="提示音: 开"], [textContent="提示音: 关"]'),
-                document.getElementById('speedUp'),
-                document.getElementById('speedDown'),
-                document.getElementById('subjectSettingsButton')
-            ];
-
-            buttons.forEach(button => {
-                if (button) {
-                    if (isHangupMode) {
-                        button.disabled = true;
-                        button.style.opacity = '0.6';
-                        button.style.cursor = 'not-allowed';
-                    } else {
-                        button.disabled = false;
-                        button.style.opacity = '1';
-                        button.style.cursor = 'pointer';
-                    }
+            document.querySelectorAll('.toggle-container, #speedUp, #speedDown, #subjectSettingsButton').forEach(el => {
+                if (isHangupMode) {
+                    el.style.pointerEvents = 'none';
+                    el.style.opacity = '0.6';
+                } else {
+                    el.style.pointerEvents = '';
+                    el.style.opacity = '1';
                 }
             });
         }
     };
 
     /**
-     * UI模块 - 管理控制面板的创建与交互
+     * 统一弹窗模块
      */
-    const UI = {
-        panel: null,
+    const MessageBox = {
+        /**
+         * 显示确认弹窗
+         * @param {string} title - 标题
+         * @param {string} content - 内容，支持HTML
+         * @param {function} confirmCallback - 确认回调
+         */
+        confirm(title, content, confirmCallback) {
+            const overlay = document.createElement('div');
+            overlay.style.position = 'fixed';
+            overlay.style.top = '0';
+            overlay.style.left = '0';
+            overlay.style.width = '100vw';
+            overlay.style.height = '100vh';
+            overlay.style.background = 'rgba(0,0,0,0.5)';
+            overlay.style.zIndex = '9999';
 
-        createControlPanel() {
-            const panel = document.createElement('div');
-            panel.id = 'ewt-helper-panel';
-            panel.style.position = 'fixed';
-            panel.style.top = '0';
-            panel.style.left = '50%';
-            panel.style.transform = 'translateX(-50%)';
-            panel.style.zIndex = '9999';
-            panel.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-            panel.style.padding = '8px 15px';
-            panel.style.color = 'white';
-            panel.style.fontSize = '12px';
-            panel.style.display = 'inline-flex';
-            panel.style.alignItems = 'center';
-            panel.style.gap = '15px';
-            panel.style.borderRadius = '0 0 8px 8px';
-            panel.style.whiteSpace = 'nowrap';
-            panel.style.transition = 'all 0.3s ease';
-            panel.style.opacity = Config.panelOpacity;
+            const dialog = document.createElement('div');
+            dialog.style.position = 'fixed';
+            dialog.style.top = '50%';
+            dialog.style.left = '50%';
+            dialog.style.transform = 'translate(-50%, -45%)';
+            dialog.style.background = '#ffffff';
+            dialog.style.borderRadius = '12px';
+            dialog.style.boxShadow = '0 6px 16px rgba(0,0,0,0.15)';
+            dialog.style.width = '360px';
+            dialog.style.opacity = '0';
+            dialog.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
 
-            panel.addEventListener('mouseenter', () => {
-                panel.style.opacity = Config.panelHoverOpacity;
+            setTimeout(() => {
+                dialog.style.opacity = '1';
+                dialog.style.transform = 'translate(-50%, -50%)';
+            }, 10);
+
+            const titleDiv = document.createElement('div');
+            titleDiv.style.height = '48px';
+            titleDiv.style.lineHeight = '48px';
+            titleDiv.style.paddingLeft = '20px';
+            titleDiv.style.fontSize = '18px';
+            titleDiv.style.fontWeight = 'bold';
+            titleDiv.style.color = '#1f2937';
+            titleDiv.textContent = title;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.style.padding = '20px';
+            contentDiv.style.fontSize = '16px';
+            contentDiv.style.color = '#4b5563';
+            contentDiv.style.lineHeight = '1.5';
+            contentDiv.innerHTML = content;
+
+            const buttonsDiv = document.createElement('div');
+            buttonsDiv.style.padding = '0 20px 20px';
+            buttonsDiv.style.textAlign = 'right';
+
+            const cancelBtn = UIHelpers.createButton('取消', '#6b7280', '#4b5563', () => {});
+            cancelBtn.style.marginRight = '12px';
+            const confirmBtn = UIHelpers.createButton('确认', '#f97316', '#ea580c', () => {});
+
+            buttonsDiv.appendChild(cancelBtn);
+            buttonsDiv.appendChild(confirmBtn);
+
+            dialog.appendChild(titleDiv);
+            dialog.appendChild(contentDiv);
+            dialog.appendChild(buttonsDiv);
+
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+
+            const close = () => {
+                dialog.style.opacity = '0';
+                dialog.style.transform = 'translate(-50%, -45%)';
+                setTimeout(() => overlay.remove(), 300);
+            };
+
+            cancelBtn.addEventListener('click', close);
+            confirmBtn.addEventListener('click', () => {
+                confirmCallback();
+                close();
             });
-            panel.addEventListener('mouseleave', () => {
-                panel.style.opacity = Config.panelOpacity;
-            });
-
-            panel.appendChild(this.createStatsArea());
-            panel.appendChild(this.createSpeedControlArea());
-            panel.appendChild(this.createButtonArea());
-
-            this.panel = panel;
-            document.body.appendChild(panel);
-
-            // 应用当前模式和倍速控制状态
-            ModeControl.applyMode();
-            SpeedControl.updateSpeedControlUI();
-
-            // 检查挂机模式状态并更新按钮
-            const isHangupMode = ConfigManager.get('hangupModeEnabled');
-            HangupMode.updateOtherButtonsState(isHangupMode);
-
-            return panel;
         },
 
-        createStatsArea() {
+        /**
+         * 显示提示弹窗
+         * @param {string} title - 标题
+         * @param {string} content - 内容，支持HTML
+         * @param {function} [closeCallback] - 关闭回调
+         */
+        alert(title, content, closeCallback = () => {}) {
+            const overlay = document.createElement('div');
+            overlay.style.position = 'fixed';
+            overlay.style.top = '0';
+            overlay.style.left = '0';
+            overlay.style.width = '100vw';
+            overlay.style.height = '100vh';
+            overlay.style.background = 'rgba(0,0,0,0.5)';
+            overlay.style.zIndex = '9999';
+
+            const dialog = document.createElement('div');
+            dialog.style.position = 'fixed';
+            dialog.style.top = '50%';
+            dialog.style.left = '50%';
+            dialog.style.transform = 'translate(-50%, -45%)';
+            dialog.style.background = '#ffffff';
+            dialog.style.borderRadius = '12px';
+            dialog.style.boxShadow = '0 6px 16px rgba(0,0,0,0.15)';
+            dialog.style.width = '360px';
+            dialog.style.opacity = '0';
+            dialog.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+
+            setTimeout(() => {
+                dialog.style.opacity = '1';
+                dialog.style.transform = 'translate(-50%, -50%)';
+            }, 10);
+
+            const titleDiv = document.createElement('div');
+            titleDiv.style.height = '48px';
+            titleDiv.style.lineHeight = '48px';
+            titleDiv.style.paddingLeft = '20px';
+            titleDiv.style.fontSize = '18px';
+            titleDiv.style.fontWeight = 'bold';
+            titleDiv.style.color = '#1f2937';
+            titleDiv.textContent = title;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.style.padding = '20px';
+            contentDiv.style.fontSize = '16px';
+            contentDiv.style.color = '#4b5563';
+            contentDiv.style.lineHeight = '1.5';
+            contentDiv.innerHTML = content;
+
+            const buttonsDiv = document.createElement('div');
+            buttonsDiv.style.padding = '0 20px 20px';
+            buttonsDiv.style.textAlign = 'right';
+
+            const okBtn = UIHelpers.createButton('确认', '#3b82f6', '#2563eb', () => {});
+
+            buttonsDiv.appendChild(okBtn);
+
+            dialog.appendChild(titleDiv);
+            dialog.appendChild(contentDiv);
+            dialog.appendChild(buttonsDiv);
+
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+
+            const close = () => {
+                dialog.style.opacity = '0';
+                dialog.style.transform = 'translate(-50%, -45%)';
+                setTimeout(() => overlay.remove(), 300);
+            };
+
+            okBtn.addEventListener('click', () => {
+                closeCallback();
+                close();
+            });
+        }
+    };
+
+    /**
+     * UI 辅助模块 - 提供创建 UI 元素的公共方法
+     */
+    const UIHelpers = {
+        createStatsArea(isVertical = false) {
             const statsDiv = document.createElement('div');
             statsDiv.id = 'statsArea';
             statsDiv.style.display = 'flex';
+            statsDiv.style.flexDirection = isVertical ? 'column' : 'row';
             statsDiv.style.alignItems = 'center';
             statsDiv.style.gap = '15px';
-            statsDiv.innerHTML = `
-                <div>累计连播: <span id="videoCount" style="color:#4CAF50">0</span></div>
-                <div>累计过检: <span id="totalCheckCount" style="color:#2196F3">0</span></div>
-                <div>累计跳题: <span id="skippedQuestionCount" style="color:#9C27B0">0</span></div>
-                <div>时长: <span id="runTime">00:00:00</span></div>
-            `;
+
+            const videoCountDiv = document.createElement('div');
+            videoCountDiv.textContent = '累计连播: ';
+            const videoSpan = document.createElement('span');
+            videoSpan.style.color = '#4CAF50';
+            videoSpan.textContent = '0';
+            videoCountDiv.appendChild(videoSpan);
+            Stats.bindElement('videoPlayCount', videoSpan);
+
+            const checkCountDiv = document.createElement('div');
+            checkCountDiv.textContent = '累计过检: ';
+            const checkSpan = document.createElement('span');
+            checkSpan.style.color = '#2196F3';
+            checkSpan.textContent = '0';
+            checkCountDiv.appendChild(checkSpan);
+            Stats.bindElement('totalCheckCount', checkSpan);
+
+            const skipCountDiv = document.createElement('div');
+            skipCountDiv.textContent = '累计跳题: ';
+            const skipSpan = document.createElement('span');
+            skipSpan.style.color = '#9C27B0';
+            skipSpan.textContent = '0';
+            skipCountDiv.appendChild(skipSpan);
+            Stats.bindElement('skippedQuestionCount', skipSpan);
+
+            const runTimeDiv = document.createElement('div');
+            runTimeDiv.textContent = '时长: ';
+            const runSpan = document.createElement('span');
+            runSpan.textContent = '00:00:00';
+            runTimeDiv.appendChild(runSpan);
+            Stats.bindElement('runTime', runSpan);
+
+            statsDiv.appendChild(videoCountDiv);
+            statsDiv.appendChild(checkCountDiv);
+            statsDiv.appendChild(skipCountDiv);
+            statsDiv.appendChild(runTimeDiv);
+
             return statsDiv;
         },
 
-        createSpeedControlArea() {
+        createSpeedControlArea(isVertical = false) {
             const speedDiv = document.createElement('div');
             speedDiv.id = 'speedControlArea';
             speedDiv.style.display = 'flex';
             speedDiv.style.alignItems = 'center';
+            speedDiv.style.gap = '6px';
             speedDiv.style.padding = '0 10px';
-            speedDiv.style.borderLeft = '1px solid rgba(255, 255, 255, 0.3)';
-
-            speedDiv.innerHTML = `
-                <button id="speedDown" style="margin-right:5px; padding:2px 6px; border-radius:4px; border:none; background:#555; color:white; cursor:pointer;">-</button>
-                <span style="color:#FFC107">倍速:</span>
-                <span id="speedDisplay" style="margin:0 5px; color:#FFEB3B">${ConfigManager.get('speed')}x</span>
-                <button id="speedUp" style="margin-left:5px; padding:2px 6px; border-radius:4px; border:none; background:#555; color:white; cursor:pointer;">+</button>
-            `;
-
-            speedDiv.querySelector('#speedUp').addEventListener('click', () => {
-                SpeedControl.nextSpeed();
-            });
-            speedDiv.querySelector('#speedDown').addEventListener('click', () => {
-                SpeedControl.prevSpeed();
+            speedDiv.style.borderLeft = '1px solid rgba(255,255,255,0.3)';
+            Object.assign(speedDiv.style, {
+                display: 'flex',
+                alignItems: 'center',     // 垂直居中
+                justifyContent: 'center', // 水平居中
+                gap: '6px',
+                padding: '4px 8px'
             });
 
+            const downBtn = document.createElement('button');
+            downBtn.id = 'speedDown';
+            downBtn.textContent = '−';
+            Object.assign(downBtn.style, {
+                width: '20px', height: '20px',
+                borderRadius: '4px', border: 'none',
+                background: '#555', color: '#fff',
+                cursor: 'pointer', lineHeight: 1
+            });
+            downBtn.onclick = () => SpeedControl.prevSpeed();
+
+            const display = document.createElement('span');
+            display.id = 'speedDisplay';
+            display.style.color = '#FFEB3B';
+            display.style.minWidth = '32px';
+            display.style.textAlign = 'center';
+            SpeedControl.bindSpeedDisplay(display);
+
+            const upBtn = document.createElement('button');
+            upBtn.id = 'speedUp';
+            upBtn.textContent = '+';
+            Object.assign(upBtn.style, {
+                width: '20px', height: '20px',
+                borderRadius: '4px', border: 'none',
+                background: '#555', color: '#fff',
+                cursor: 'pointer', lineHeight: 1
+            });
+            upBtn.onclick = () => SpeedControl.nextSpeed();
+
+            speedDiv.append(downBtn, display, upBtn);
             return speedDiv;
         },
 
-        createButtonArea() {
+        createButtonArea(isVertical = false) {
             const buttonsDiv = document.createElement('div');
+            buttonsDiv.id = 'buttonArea';
             buttonsDiv.style.display = 'flex';
+            buttonsDiv.style.flexDirection = isVertical ? 'column' : 'row';
             buttonsDiv.style.alignItems = 'center';
             buttonsDiv.style.gap = '8px';
             buttonsDiv.style.paddingLeft = '10px';
             buttonsDiv.style.borderLeft = '1px solid rgba(255, 255, 255, 0.3)';
 
-            // 模式切换按钮
-            const modeButton = this.createModeButton();
-            buttonsDiv.appendChild(modeButton);
-
             // 科目设置按钮
-            buttonsDiv.appendChild(this.createSubjectSettingsButton());
+            const subjectButton = this.createCardButton('科目设置', '#3b82f6', '#2563eb', () => HangupMode.openSubjectSettings());
+            subjectButton.id = 'subjectSettingsButton';
+            buttonsDiv.appendChild(subjectButton);
 
             // 挂机模式按钮
-            buttonsDiv.appendChild(this.createHangupButton());
-
-            // 倍速功能开关按钮
-            buttonsDiv.appendChild(this.createFunctionButton(
-                '倍速',
-                ConfigManager.get('speedControlEnabled'),
-                (isEnabled) => {
-                    SpeedControl.toggle(isEnabled);
-                    // 同步更新模式显示
-                    ModeControl.applyMode();
+            const hangupEnabled = ConfigManager.get('hangupModeEnabled');
+            const hangupButton = this.createCardButton(
+                `挂机`,
+                ConfigManager.get('hangupModeEnabled') ? '#FF9800' : '#f4a836ff',
+                ConfigManager.get('hangupModeEnabled') ? '#f57c00' : '#f4a836ff',
+                () => {
+                    const isCurrentlyEnabled = ConfigManager.get('hangupModeEnabled');
+                    HangupMode.toggle(!isCurrentlyEnabled);
                 }
-            ));
+            );
+            hangupButton.id = 'hangupButton';
+            buttonsDiv.appendChild(hangupButton);
 
-            buttonsDiv.appendChild(this.createFunctionButton(
-                '过检',
-                ConfigManager.get('autoCheckEnabled'),
-                (isEnabled) => {
-                    // 如果在挂机模式下，不允许修改
-                    if (ConfigManager.get('hangupModeEnabled')) return;
+            // 倍速开关
+            buttonsDiv.appendChild(this.createToggle('倍速', '#3b82f6', ConfigManager.get('speedControlEnabled'), (enabled) => SpeedControl.toggle(enabled)));
 
-                    AutoCheck.toggle(isEnabled);
-                    ConfigManager.update('autoCheckEnabled', isEnabled);
-                }
-            ));
-            buttonsDiv.appendChild(this.createFunctionButton(
-                '连播',
-                ConfigManager.get('autoPlayEnabled'),
-                (isEnabled) => {
-                    // 如果在挂机模式下，不允许修改
-                    if (ConfigManager.get('hangupModeEnabled')) return;
+            // 过检开关
+            buttonsDiv.appendChild(this.createToggle('过检', '#3b82f6', ConfigManager.get('autoCheckEnabled'), (enabled) => {
+                if (ConfigManager.get('hangupModeEnabled')) return;
+                AutoCheck.toggle(enabled);
+                ConfigManager.update('autoCheckEnabled', enabled);
+            }));
 
-                    AutoPlay.toggle(isEnabled);
-                    ConfigManager.update('autoPlayEnabled', isEnabled);
-                }
-            ));
-            buttonsDiv.appendChild(this.createFunctionButton(
-                '跳题',
-                ConfigManager.get('autoSkipEnabled'),
-                (isEnabled) => {
-                    // 如果在挂机模式下，不允许修改
-                    if (ConfigManager.get('hangupModeEnabled')) return;
+            // 连播开关
+            buttonsDiv.appendChild(this.createToggle('连播', '#3b82f6', ConfigManager.get('autoPlayEnabled'), (enabled) => {
+                if (ConfigManager.get('hangupModeEnabled')) return;
+                AutoPlay.toggle(enabled);
+                ConfigManager.update('autoPlayEnabled', enabled);
+            }));
 
-                    AutoSkip.toggle(isEnabled);
-                    ConfigManager.update('autoSkipEnabled', isEnabled);
-                }
-            ));
+            // 跳题开关
+            buttonsDiv.appendChild(this.createToggle('跳题', '#3b82f6', ConfigManager.get('autoSkipEnabled'), (enabled) => {
+                if (ConfigManager.get('hangupModeEnabled')) return;
+                AutoSkip.toggle(enabled);
+                ConfigManager.update('autoSkipEnabled', enabled);
+            }));
 
-            // 提示音开关按钮
-            buttonsDiv.appendChild(this.createFunctionButton(
-                '提示音',
-                ConfigManager.get('soundEnabled'),
-                (isEnabled) => {
-                    // 如果在挂机模式下，不允许修改
-                    if (ConfigManager.get('hangupModeEnabled')) return;
-
-                    ConfigManager.update('soundEnabled', isEnabled);
-                }
-            ));
+            // 提示音开关
+            buttonsDiv.appendChild(this.createToggle('提示音', '#3b82f6', ConfigManager.get('soundEnabled'), (enabled) => {
+                if (ConfigManager.get('hangupModeEnabled')) return;
+                ConfigManager.update('soundEnabled', enabled);
+            }));
 
             return buttonsDiv;
         },
-        
-        // 创建科目设置按钮
-        createSubjectSettingsButton() {
-            const button = document.createElement('button');
-            button.id = 'subjectSettingsButton';
-            button.textContent = '科目设置';
 
-            button.style.padding = '3px 8px';
+        createCardButton(labelText, color, hoverColor, callback) {
+            const button = document.createElement('button');
+            button.style.width = '80px';
+            button.style.height = '40px';
+            button.style.borderRadius = '8px';
+            button.style.backgroundColor = color;
             button.style.color = 'white';
             button.style.border = 'none';
-            button.style.borderRadius = '12px';
             button.style.cursor = 'pointer';
-            button.style.fontSize = '12px';
-            button.style.transition = 'background-color 0.2s';
-            button.style.backgroundColor = '#3266FF';
+            button.style.display = 'flex';
+            button.style.alignItems = 'center';
+            button.style.justifyContent = 'center';
+            button.style.gap = '4px';
+            button.style.transition = 'transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease';
+            button.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
 
-            button.addEventListener('click', () => {
-                HangupMode.openSubjectSettings();
+            const label = document.createElement('span');
+            label.className = 'label';
+            label.textContent = labelText;
+
+            button.appendChild(label);
+
+            button.addEventListener('mouseenter', () => {
+                button.style.transform = 'scale(1.05)';
+                button.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
+                button.style.backgroundColor = hoverColor;
             });
+            button.addEventListener('mouseleave', () => {
+                button.style.transform = '';
+                button.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                button.style.backgroundColor = color;
+            });
+            button.addEventListener('click', callback);
 
             return button;
         },
 
-        // 创建挂机模式按钮
-        createHangupButton() {
-            const button = document.createElement('button');
-            button.id = 'hangupButton';
-            const isEnabled = ConfigManager.get('hangupModeEnabled');
+        createToggle(labelText, onColor, initialState, toggleCallback) {
+            const container = document.createElement('div');
+            container.className = 'toggle-container';
+            container.style.display = 'flex';
+            container.style.alignItems = 'center';
+            container.style.gap = '4px';
+            container.style.transition = 'all 0.2s ease';
 
-            button.textContent = `挂机: ${isEnabled ? '开' : '关'}`;
-            button.style.padding = '3px 8px';
+            const label = document.createElement('span');
+            label.className = 'label';
+            label.textContent = labelText;
+            label.style.color = 'white';
+
+            const switchDiv = document.createElement('div');
+            switchDiv.className = 'switch';
+            switchDiv.style.position = 'relative';
+            switchDiv.style.width = '40px';
+            switchDiv.style.height = '20px';
+            switchDiv.style.backgroundColor = initialState ? onColor : '#d1d5db';
+            switchDiv.style.borderRadius = '10px';
+            switchDiv.style.cursor = 'pointer';
+            switchDiv.style.transition = 'background-color 0.2s ease';
+
+            const slider = document.createElement('div');
+            slider.className = 'slider';
+            slider.style.position = 'absolute';
+            slider.style.width = '18px';
+            slider.style.height = '18px';
+            slider.style.backgroundColor = '#ffffff';
+            slider.style.borderRadius = '50%';
+            slider.style.top = '1px';
+            slider.style.left = initialState ? '21px' : '1px';
+            slider.style.transition = 'left 0.2s ease';
+
+            switchDiv.appendChild(slider);
+            container.appendChild(label);
+            container.appendChild(switchDiv);
+
+            switchDiv.addEventListener('click', () => {
+                const newState = !initialState;
+                toggleCallback(newState);
+                initialState = newState; // Update local state
+                switchDiv.style.backgroundColor = newState ? onColor : '#d1d5db';
+                slider.style.left = newState ? '21px' : '1px';
+            });
+
+            // Add class for identification
+            switchDiv.classList.add(`toggle-${labelText}`);
+
+            return container;
+        },
+
+        createButton(text, color, hoverColor, callback) {
+            const button = document.createElement('button');
+            button.textContent = text;
+            button.style.padding = '8px 16px';
+            button.style.backgroundColor = color;
             button.style.color = 'white';
             button.style.border = 'none';
-            button.style.borderRadius = '12px';
+            button.style.borderRadius = '6px';
             button.style.cursor = 'pointer';
-            button.style.fontSize = '12px';
-            button.style.transition = 'background-color 0.2s';
-            button.style.backgroundColor = isEnabled ? '#FF9800' : '#f44336';
+            button.style.transition = 'background-color 0.2s ease';
 
-            button.addEventListener('click', () => {
-                const newState = !ConfigManager.get('hangupModeEnabled');
-                HangupMode.toggle(newState);
-                ConfigManager.update('hangupModeEnabled', newState);
+            button.addEventListener('mouseenter', () => {
+                button.style.backgroundColor = hoverColor;
             });
+            button.addEventListener('mouseleave', () => {
+                button.style.backgroundColor = color;
+            });
+            button.addEventListener('click', callback);
 
             return button;
         },
 
-        createModeButton() {
-            const button = document.createElement('button');
-            button.id = 'modeToggleButton';
-            button.textContent = ModeControl.currentMode === 'normal' ? '普通' : '极简';
+        updateUIStates() {
+            const toggles = [
+                { selector: '.toggle-倍速', key: 'speedControlEnabled', color: '#3b82f6' },
+                { selector: '.toggle-过检', key: 'autoCheckEnabled', color: '#3b82f6' },
+                { selector: '.toggle-连播', key: 'autoPlayEnabled', color: '#3b82f6' },
+                { selector: '.toggle-跳题', key: 'autoSkipEnabled', color: '#3b82f6' },
+                { selector: '.toggle-提示音', key: 'soundEnabled', color: '#3b82f6' }
+            ];
 
-            button.style.padding = '3px 8px';
-            button.style.color = 'white';
-            button.style.border = 'none';
-            button.style.borderRadius = '12px';
-            button.style.cursor = 'pointer';
-            button.style.fontSize = '12px';
-            button.style.transition = 'background-color 0.2s';
-            button.style.backgroundColor = '#2196F3';
-
-            button.addEventListener('click', () => {
-                ModeControl.toggleMode();
+            toggles.forEach(t => {
+                document.querySelectorAll(t.selector).forEach(switchDiv => {
+                    if (switchDiv) {
+                        const enabled = ConfigManager.get(t.key);
+                        switchDiv.style.backgroundColor = enabled ? t.color : '#d1d5db';
+                        switchDiv.querySelector('.slider').style.left = enabled ? '21px' : '1px';
+                    }
+                });
             });
 
-            return button;
+            // Update hangup button
+            const hangupEnabled = ConfigManager.get('hangupModeEnabled');
+            document.querySelectorAll('#hangupButton').forEach(hangupBtn => {
+                if (hangupBtn) {
+                    hangupBtn.querySelector('.label').textContent = `挂机: ${hangupEnabled ? '开' : '关'}`;
+                    hangupBtn.style.backgroundColor = hangupEnabled ? '#FF9800' : '#f4a836ff';
+                }
+            });
+        }
+    };
+
+    /**
+     * 极简侧边栏模块 - 管理极简模式下的侧边栏
+     */
+    const SidebarModule = {
+        panel: null,
+        content: null,
+        dragging: false,
+        offsetX: 0,
+        offsetY: 0,
+        rafId: null,
+
+        init() {
+            if (this.panel) return;
+
+            // 添加样式
+            if (!document.getElementById('ewt-styles')) {
+                const style = document.createElement('style');
+                style.id = 'ewt-styles';
+                style.innerHTML = `
+                    #ewt-helper-sidebar.shrunk .label { display: none; }
+                    #ewt-helper-sidebar.shrunk #statsArea { display: none; }
+                    #ewt-helper-sidebar.shrunk #speedControlArea > span:not(#speedDisplay) { display: none; }
+                    #ewt-helper-sidebar.shrunk .toggle-container { justify-content: center; }
+                    #ewt-helper-sidebar.shrunk button { width: 40px; height: 40px; justify-content: center; }
+                    #ewt-helper-sidebar.shrunk button .label { display: none; }
+                `;
+                document.head.appendChild(style);
+            }
+
+            const panel = document.createElement('div');
+            panel.id = 'ewt-helper-sidebar';
+            panel.style.position = 'fixed';
+            panel.style.top = '0';
+            panel.style.right = '0';
+            panel.style.height = 'auto';
+            panel.style.width = '15vw';
+            panel.style.maxHeight = '60vh';
+            panel.style.minWidth = '20px';
+            panel.style.zIndex = '10000';
+            panel.style.backgroundColor = 'rgba(17, 24, 39, 0.9)';
+            panel.style.color = 'white';
+            panel.style.fontSize = '12px';
+            panel.style.borderRadius = '8px 0 0 8px';
+            panel.style.transition = 'width 0.2s ease, opacity 0.2s ease';
+            panel.style.opacity = Config.panelOpacity;
+            panel.addEventListener('mouseenter', () => panel.style.opacity = Config.panelHoverOpacity);
+            panel.addEventListener('mouseleave', () => panel.style.opacity = Config.panelOpacity);
+
+            const titleBar = document.createElement('div');
+            titleBar.style.height = '30px';
+            titleBar.style.lineHeight = '30px';
+            titleBar.style.padding = '0 10px';
+            titleBar.style.borderBottom = '1px solid rgba(255,255,255,0.1)';
+            titleBar.style.cursor = 'move';
+            titleBar.style.display = 'flex';
+            titleBar.style.alignItems = 'center';
+            titleBar.style.justifyContent = 'space-between';
+
+            const title = document.createElement('span');
+            title.textContent = '升学E网通助手';
+            title.style.fontWeight = 'bold';
+
+            const shrinkBtn = document.createElement('button');
+            shrinkBtn.textContent = '-';
+            shrinkBtn.style.background = 'none';
+            shrinkBtn.style.border = 'none';
+            shrinkBtn.style.color = 'white';
+            shrinkBtn.style.cursor = 'pointer';
+            shrinkBtn.addEventListener('click', () => {
+                const isShrunk = content.style.display !== 'none';
+                content.style.display = isShrunk ? 'none' : 'flex';
+                shrinkBtn.textContent = isShrunk ? '+' : '-';
+                panel.style.height = isShrunk ? 'auto' : '100vh';
+                ConfigManager.update('sidebarShrunk', !isShrunk);
+            });
+
+            titleBar.appendChild(title);
+            titleBar.appendChild(shrinkBtn);
+
+            const content = document.createElement('div');
+            content.style.padding = '10px';
+            content.style.display = 'flex';
+            content.style.flexDirection = 'column';
+            content.style.alignItems = 'stretch';
+            content.style.gap = '15px';
+
+            content.appendChild(UIHelpers.createStatsArea(true));
+            content.appendChild(UIHelpers.createSpeedControlArea(true));
+            content.appendChild(UIHelpers.createButtonArea(true));
+
+            panel.appendChild(titleBar);
+            panel.appendChild(content);
+
+            document.body.appendChild(panel);
+
+            this.panel = panel;
+            this.content = content;
+
+            // 设置收缩状态
+            if (ConfigManager.get('sidebarShrunk')) {
+                this.toggleShrink(true);
+            }
+
+            // 设置位置
+            let savedPosition = ConfigManager.get('sidebarPosition');
+            if (!savedPosition) {
+                panel.style.top = '0px';
+                panel.style.right = '0px';
+                savedPosition = { top: panel.style.top, right: panel.style.right };
+                ConfigManager.update('sidebarPosition', savedPosition);
+            } else {
+                panel.style.top = savedPosition.top;
+                panel.style.right = savedPosition.right;
+            }
+
+            // 拖拽事件
+            titleBar.addEventListener('mousedown', (e) => {
+                this.dragging = true;
+                const rect = panel.getBoundingClientRect();
+                this.offsetX = e.clientX - rect.left;
+                this.offsetY = e.clientY - rect.top;
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!this.dragging) return;
+                if (this.rafId) cancelAnimationFrame(this.rafId);
+                this.rafId = requestAnimationFrame(() => {
+                    let newLeft = e.clientX - this.offsetX;
+                    let newTop = e.clientY - this.offsetY;
+                    const rect = panel.getBoundingClientRect();
+                    const winWidth = document.documentElement.clientWidth;
+                    const winHeight = document.documentElement.clientHeight;
+                    newLeft = Math.max(10, Math.min(newLeft, winWidth - rect.width - 10));
+                    newTop = Math.max(10, Math.min(newTop, winHeight - rect.height - 10));
+                    panel.style.left = `${newLeft}px`;
+                    panel.style.top = `${newTop}px`;
+                    panel.style.right = 'auto';
+                });
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (this.dragging) {
+                    this.dragging = false;
+                    if (this.rafId) cancelAnimationFrame(this.rafId);
+                    ConfigManager.update('sidebarPosition', { top: this.panel.style.top, right: this.panel.style.right });
+                }
+            });
         },
 
-        createFunctionButton(name, initialState, toggleCallback) {
-            const button = document.createElement('button');
-            let isEnabled = initialState;
+        toggleShrink(force = null) {
+            const shrinkBtn = this.panel.querySelector('button');
+            const isShrunk = force !== null ? force : this.panel.classList.contains('shrunk');
+            if (isShrunk) {
+                this.panel.classList.remove('shrunk');
+                this.panel.style.width = '15vw';
+                shrinkBtn.textContent = '-';
+            } else {
+                this.panel.classList.add('shrunk');
+                this.panel.style.width = '50px';
+                shrinkBtn.textContent = '+';
+            }
+            ConfigManager.update('sidebarShrunk', !isShrunk);
+        },
 
-            const updateButton = () => {
-                button.textContent = `${name}: ${isEnabled ? '开' : '关'}`;
-                button.style.backgroundColor = isEnabled ? '#4CAF50' : '#f44336';
+        show() {
+            if (this.panel) this.panel.style.display = 'block';
+        },
+
+        hide() {
+            if (this.panel) this.panel.style.display = 'none';
+        }
+    };
+
+    /**
+     * 移动端UI模块 - 管理小屏下的浮动按钮和弹出菜单
+     */
+    const MobileUIModule = {
+        button: null,
+        popup: null,
+        isOpen: false,
+        handleOutsideClick: null,
+        handleEsc: null,
+
+        init() {
+            if (this.button) return;
+
+            // 创建浮动按钮
+            this.button = document.createElement('button');
+            this.button.style.position = 'fixed';
+            this.button.style.bottom = '20px';
+            this.button.style.right = '20px';
+            this.button.style.width = '48px';
+            this.button.style.height = '48px';
+            this.button.style.borderRadius = '50%';
+            this.button.style.backgroundColor = 'rgba(17,24,39,0.9)';
+            this.button.style.color = 'white';
+            this.button.style.fontSize = '24px';
+            this.button.style.border = 'none';
+            this.button.style.cursor = 'pointer';
+            this.button.style.zIndex = '10001';
+            this.button.style.display = 'none';
+            this.button.textContent = '⚙';
+            this.button.setAttribute('aria-label', 'Open assistant settings');
+            this.button.setAttribute('role', 'button');
+            this.button.addEventListener('click', debounce(() => this.togglePopup(), 200));
+            document.body.appendChild(this.button);
+
+            // 创建弹出菜单
+            this.popup = document.createElement('div');
+            this.popup.style.position = 'fixed';
+            this.popup.style.bottom = '80px';
+            this.popup.style.right = '20px';
+            this.popup.style.width = '240px';
+            this.popup.style.maxHeight = '70vh';
+            this.popup.style.overflowY = 'auto';
+            this.popup.style.backgroundColor = 'rgba(17,24,39,0.95)';
+            this.popup.style.color = 'white';
+            this.popup.style.borderRadius = '8px';
+            this.popup.style.padding = '10px';
+            this.popup.style.zIndex = '10002';
+            this.popup.style.display = 'none';
+            this.popup.setAttribute('role', 'menu');
+            this.popup.setAttribute('aria-label', 'Settings menu');
+
+            // 构建弹出菜单内容
+            const speedControl = UIHelpers.createSpeedControlArea();
+            speedControl.style.marginBottom = '10px';
+
+            const buttonArea = UIHelpers.createButtonArea(true);
+            buttonArea.style.marginBottom = '10px';
+            buttonArea.style.borderLeft = 'none';
+            buttonArea.style.paddingLeft = '0';
+
+            const statsArea = UIHelpers.createStatsArea(true);
+
+            this.popup.appendChild(speedControl);
+            this.popup.appendChild(buttonArea);
+            this.popup.appendChild(statsArea);
+
+            document.body.appendChild(this.popup);
+
+            // 定义事件处理函数
+            this.handleOutsideClick = (e) => {
+                if (!this.popup.contains(e.target) && e.target !== this.button) {
+                    this.closePopup();
+                }
             };
-            updateButton();
 
-            button.style.padding = '3px 8px';
-            button.style.color = 'white';
-            button.style.border = 'none';
-            button.style.borderRadius = '12px';
-            button.style.cursor = 'pointer';
-            button.style.fontSize = '12px';
-            button.style.transition = 'background-color 0.2s';
-
-            button.addEventListener('click', () => {
-                isEnabled = !isEnabled;
-                updateButton();
-                toggleCallback(isEnabled);
-            });
-
-            return button;
+            this.handleEsc = (e) => {
+                if (e.key === 'Escape') {
+                    this.closePopup();
+                }
+            };
         },
 
-        removePanel() {
-            if (this.panel) {
-                this.panel.remove();
-                this.panel = null;
+        showButton() {
+            if (this.button) this.button.style.display = 'block';
+        },
+
+        hideButton() {
+            if (this.button) this.button.style.display = 'none';
+        },
+
+        openPopup() {
+            this.popup.style.display = 'block';
+            this.isOpen = true;
+            UIHelpers.updateUIStates();
+            SpeedControl.updateSpeedControlUI();
+            document.addEventListener('click', this.handleOutsideClick);
+            document.addEventListener('keydown', this.handleEsc);
+        },
+
+        closePopup() {
+            this.popup.style.display = 'none';
+            this.isOpen = false;
+            document.removeEventListener('click', this.handleOutsideClick);
+            document.removeEventListener('keydown', this.handleEsc);
+        },
+
+        togglePopup() {
+            if (this.isOpen) {
+                this.closePopup();
+            } else {
+                this.openPopup();
             }
         }
     };
@@ -1267,6 +1726,7 @@
             } else {
                 this.stop();
             }
+            UIHelpers.updateUIStates();
         },
 
         start() {
@@ -1320,6 +1780,7 @@
             } else {
                 this.stop();
             }
+            UIHelpers.updateUIStates();
         },
 
         start() {
@@ -1391,6 +1852,7 @@
             } else {
                 this.stop();
             }
+            UIHelpers.updateUIStates();
         },
 
         start() {
@@ -1471,7 +1933,7 @@
         playSound(type) {
             // 检查是否启用提示音
             if (!ConfigManager.get('soundEnabled')) return;
-            
+
             try {
                 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 const oscillator = audioContext.createOscillator();
@@ -1509,6 +1971,36 @@
     };
 
     /**
+     * 响应式处理模块
+     */
+    const ResponsiveHandler = {
+        currentMode: null,
+
+        init() {
+            this.checkWidth();
+            window.addEventListener('resize', () => this.checkWidth());
+        },
+
+        checkWidth() {
+            const width = window.innerWidth;
+            if (width <= 768) {
+                if (this.currentMode !== 'mobile') {
+                    SidebarModule.hide();
+                    MobileUIModule.showButton();
+                    this.currentMode = 'mobile';
+                }
+            } else {
+                if (this.currentMode !== 'mobile') {
+                    MobileUIModule.hideButton();
+                    MobileUIModule.closePopup();
+                    SidebarModule.show();
+                    this.currentMode = 'desktop';
+                }
+            }
+        }
+    };
+
+    /**
      * 核心控制模块
      */
     const ScriptController = {
@@ -1523,9 +2015,9 @@
             // 初始化配置
             ConfigManager.init();
 
-            // 初始化模式控制
-            ModeControl.init();
-            UI.createControlPanel();
+            // 初始化 UI 模块
+            SidebarModule.init();
+            MobileUIModule.init();
 
             // 初始化防干扰和倍速控制
             AntiInterference.init();
@@ -1556,6 +2048,13 @@
                 Stats.updateRunTime();
             }, 1000);
 
+            // 初始化响应式处理
+            ResponsiveHandler.init();
+
+            // 更新 UI 状态
+            UIHelpers.updateUIStates();
+            HangupMode.updateOtherButtonsState(ConfigManager.get('hangupModeEnabled'));
+
             console.log('升学E网通助手（增强版）已启动');
         },
 
@@ -1574,7 +2073,9 @@
                 this.runTimeIntervalId = null;
             }
 
-            UI.removePanel();
+            SidebarModule.hide();
+            MobileUIModule.hideButton();
+            MobileUIModule.closePopup();
 
             console.log('升学E网通助手（增强版）已停止');
         },
