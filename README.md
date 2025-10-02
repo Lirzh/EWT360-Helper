@@ -24,7 +24,7 @@
 
 # 💖使用教程 - PC端(此处以Edge作为演示)
 1. 在Edge的插件商店在下载安装油猴(篡改猴)[Tampermonkey](https://microsoftedge.microsoft.com/addons/detail/%E7%AF%A1%E6%94%B9%E7%8C%B4/iikmkjmpaadaobahmlepeloendndfphd)
-2. 访问 [Script Installation | Tampermonkey](https://www.tampermonkey.net/script_installation.php#url=https://github.com/Lirzh/EWT360-Helper/raw/refs/heads/main/main.user.js)
+2. 访问 [Script Installation | Tampermonkey](https://www.tampermonkey.net/script_installation.php#url=https://github.com/ZNink/EWT360-Helper/raw/refs/heads/main/main.user.js)
 3. 在Edge管理插件页面中打开开发人员模式
 4. 至此为止，PC端教程结束，你可以关闭没用的窗口，然后使用浏览器播放网课试试
 
@@ -53,7 +53,7 @@
 - 此脚本仅供学习交流，严禁用于商业用途，若有请于24小时内删除
 
 ## 反馈问题和 Bug
-如果你在使用过程中遇到问题或发现 Bug，可以前往 [项目的 Issues 页面](https://github.com/lirzh/EWT360-Helper/issues) 提交反馈，我们会 ~~尽快~~ 处理。
+如果你在使用过程中遇到问题或发现 Bug，可以前往 [项目的 Issues 页面](https://github.com/ZNink/EWT360-Helper/issues) 提交反馈，我们会 ~~尽快~~ 处理。
 
 ## 版本列表
 
