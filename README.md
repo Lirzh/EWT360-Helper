@@ -1,5 +1,7 @@
 # EWT360 Helper
 
+[ima](/image/ewt_image.png)
+
 ## 简介
 
 - **名字**：EWT360 Helper
