@@ -1,6 +1,6 @@
 # EWT360 Helper
 
-[ima](/image/ewt_image.png)
+![ima](/image/ewt_image.png)
 
 ## 简介
 
