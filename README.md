@@ -72,7 +72,7 @@
 
 [ZNink](https://github.com/ZNink) 和 [Lirzh](https://github.com/lirzh)
 
-[Kimi](https://www.kimi.com/kimiplus-square) 和 [豆包AI](https://doubao.com)
+[Kimi](https://www.kimi.com) 和 [豆包AI](https://doubao.com)
 
 ## 免责声明
 您使用本脚本前，理解并同意：我们无法预测您的行为，因此您必须为您滥用脚本而违反相关法律法规的行为负有全部法律责任
