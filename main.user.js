@@ -5,7 +5,7 @@
 // @description  用于帮助学生通过升学E网通更好学习知识(雾)
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @match        http://teacher.ewt360.com/ewtbend/bend/index/index.html*
-// @author       ZNink, Lirzh
+// @author       ZNink
 // @icon         https://www.ewt360.com/favicon.ico
 // @grant        none
 // @updateURL    https://raw.githubusercontent.com/ZNink/EWT360-Helper/main/main.user.js
@@ -14,32 +14,23 @@
 // ==/UserScript==
 
 /**
- * 全局配置（核心新增：Debug模式开关）
- */
-const GlobalConfig = {
-    // Debug模式开关：true=开启详细日志，false=仅输出关键日志（默认关闭）
-    enableDebugMode: false,
-    // 功能检查间隔配置
-    interval: {
-        skipQuestion: 1000,  // 跳题检查间隔(ms)
-        rewatch: 2000,       // 连播检查间隔(ms)
-        checkPass: 1500,     // 过检检查间隔(ms)
-        speedCheck: 3000     // 倍速检查间隔(ms)
-    }
-};
-
-/**
- * 调试日志工具模块 - 新增Debug模式控制
+ * 调试日志工具模块 - 新增
+ * 提供分级、带时间戳的日志输出，方便调试
  */
 const DebugLogger = {
+    // 新增：日志总开关，true 开启输出，false 关闭输出
+    enabled: false,
+
     // 获取格式化时间戳
     getTimestamp() {
         const now = new Date();
         return `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}]`;
     },
 
-    // 普通日志（始终输出）
+    // 普通日志
     log(module, message, data = null) {
+        // 检查开关是否开启
+        if (!this.enabled) return;
         const logMsg = `${this.getTimestamp()} [${module}] [INFO] ${message}`;
         if (data) {
             console.log(logMsg, data);
@@ -48,8 +39,9 @@ const DebugLogger = {
         }
     },
 
-    // 警告日志（始终输出）
+    // 警告日志
     warn(module, message, data = null) {
+        if (!this.enabled) return;
         const logMsg = `${this.getTimestamp()} [${module}] [WARN] ${message}`;
         if (data) {
             console.warn(logMsg, data);
@@ -58,8 +50,9 @@ const DebugLogger = {
         }
     },
 
-    // 错误日志（始终输出）
+    // 错误日志
     error(module, message, error = null) {
+        if (!this.enabled) return;
         const logMsg = `${this.getTimestamp()} [${module}] [ERROR] ${message}`;
         if (error) {
             console.error(logMsg, error);
@@ -68,10 +61,9 @@ const DebugLogger = {
         }
     },
 
-    // 调试日志（仅Debug模式开启时输出）
+    // 调试日志（更详细）
     debug(module, message, data = null) {
-        if (!GlobalConfig.enableDebugMode) return; // Debug模式关闭时直接返回
-        
+        if (!this.enabled) return;
         const logMsg = `${this.getTimestamp()} [${module}] [DEBUG] ${message}`;
         if (data) {
             console.debug(logMsg, data);
@@ -79,12 +71,16 @@ const DebugLogger = {
             console.debug(logMsg);
         }
     },
+};
 
-    // 切换Debug模式（可选：运行时动态切换）
-    toggleDebugMode(enable) {
-        GlobalConfig.enableDebugMode = enable;
-        this.log('DebugLogger', `Debug模式已${enable ? '开启' : '关闭'}`);
-    }
+/**
+ * 配置常量
+ */
+const Config = {
+    skipQuestionInterval: 1000, // 跳题检查间隔(ms)
+    rewatchInterval: 2000,      // 连播检查间隔(ms)
+    checkPassInterval: 1500,    // 过检检查间隔(ms)
+    speedCheckInterval: 3000    // 倍速检查间隔(ms)
 };
 
 /**
@@ -109,8 +105,8 @@ const AutoSkip = {
 
         this.intervalId = setInterval(() => {
             this.checkAndSkip();
-        }, GlobalConfig.interval.skipQuestion);
-        DebugLogger.log('AutoSkip', `自动跳题已开启，检查间隔：${GlobalConfig.interval.skipQuestion}ms`);
+        }, Config.skipQuestionInterval);
+        DebugLogger.log('AutoSkip', '自动跳题已开启，检查间隔：' + Config.skipQuestionInterval + 'ms');
     },
 
     stop() {
@@ -126,16 +122,17 @@ const AutoSkip = {
     checkAndSkip() {
         try {
             DebugLogger.debug('AutoSkip', '开始检查是否有可跳过的题目');
-            
+
             const skipTexts = ['跳过', '跳题', '跳过题目', '暂不回答', '以后再说', '跳过本题'];
             let targetButton = null;
 
             skipTexts.some(text => {
+                // 调试日志：当前检查的文本
                 DebugLogger.debug('AutoSkip', `查找包含文本"${text}"的按钮`);
-                
+
                 const buttons = document.querySelectorAll('button, a, span.btn, div.btn');
                 DebugLogger.debug('AutoSkip', `找到按钮总数：${buttons.length}`);
-                
+
                 for (const btn of buttons) {
                     const btnText = btn.textContent.trim();
                     if (btnText === text) {
@@ -165,22 +162,26 @@ const AutoSkip = {
             });
 
             if (targetButton) {
+                // 检查是否已点击过
                 if (targetButton.dataset.skipClicked) {
                     DebugLogger.debug('AutoSkip', '目标按钮已标记为已点击，跳过本次操作', targetButton);
                     return;
                 }
 
+                // 标记为已点击
                 targetButton.dataset.skipClicked = 'true';
                 DebugLogger.debug('AutoSkip', '标记按钮为已点击，防止重复操作');
 
+                // 模拟点击
                 const clickEvent = new MouseEvent('click', {
                     bubbles: true,
                     cancelable: true,
                     view: window
                 });
                 targetButton.dispatchEvent(clickEvent);
-                DebugLogger.log('AutoSkip', `已自动跳过题目，按钮文本：${targetButton.textContent.trim()}`, targetButton);
+                DebugLogger.log('AutoSkip', '已自动跳过题目，按钮文本：' + targetButton.textContent.trim(), targetButton);
 
+                // 5秒后清除标记
                 setTimeout(() => {
                     delete targetButton.dataset.skipClicked;
                     DebugLogger.debug('AutoSkip', '清除按钮点击标记', targetButton);
@@ -194,8 +195,10 @@ const AutoSkip = {
     }
 };
 
+
 /**
  * 自动连播模块
+ * 已修复：适配实际页面结构，修正选择器
  */
 const AutoPlay = {
     intervalId: null,
@@ -216,8 +219,8 @@ const AutoPlay = {
 
         this.intervalId = setInterval(() => {
             this.checkAndSwitch();
-        }, GlobalConfig.interval.rewatch);
-        DebugLogger.log('AutoPlay', `自动连播已开启，检查间隔：${GlobalConfig.interval.rewatch}ms`);
+        }, Config.rewatchInterval);
+        DebugLogger.log('AutoPlay', '自动连播已开启，检查间隔：' + Config.rewatchInterval + 'ms');
     },
 
     stop() {
@@ -233,7 +236,7 @@ const AutoPlay = {
     checkAndSwitch() {
         try {
             DebugLogger.debug('AutoPlay', '开始检查是否需要切换视频');
-            
+
             // 1. 检测特定图片元素作为连播触发条件
             const progressImage = document.querySelector('img.progress-img-vkUYM[src="//file.ewt360.com/file/1820894120067424424"]');
             if (!progressImage) {
@@ -242,7 +245,7 @@ const AutoPlay = {
             }
             DebugLogger.debug('AutoPlay', '检测到连播触发图片', progressImage);
 
-            // 2. 获取视频列表容器
+            // 2. 获取视频列表容器（根据提供的页面结构修正）
             const videoListContainer = document.querySelector('.listCon-zrsBh');
             if (!videoListContainer) {
                 DebugLogger.warn('AutoPlay', '未找到视频列表容器');
@@ -250,34 +253,39 @@ const AutoPlay = {
             }
             DebugLogger.debug('AutoPlay', '找到视频列表容器', videoListContainer);
 
-            // 3. 查找当前活跃视频
+            // 3. 查找当前活跃视频（根据提供的页面结构，活跃视频有active-EI2Hl类）
             const activeVideo = videoListContainer.querySelector('.item-blpma.active-EI2Hl');
             if (!activeVideo) {
                 DebugLogger.warn('AutoPlay', '未找到当前活跃视频');
                 return;
             }
             const activeVideoTitle = activeVideo.querySelector('.lessontitle-G206y')?.textContent || '未知标题';
-            DebugLogger.log('AutoPlay', `找到当前活跃视频: ${activeVideoTitle}`, activeVideo);
+            DebugLogger.log('AutoPlay', '找到当前活跃视频: ' + activeVideoTitle, activeVideo);
 
             // 4. 查找下一个视频项
             let nextVideo = activeVideo.nextElementSibling;
             let foundNextVideo = false;
-            
+
             while (nextVideo) {
                 DebugLogger.debug('AutoPlay', '检查下一个视频项', nextVideo);
-                
-                if (nextVideo.classList.contains('item-blpma') && !nextVideo.querySelector('.finished-PsNX9')) {
-                    const nextVideoTitle = nextVideo.querySelector('.lessontitle-G206y')?.textContent || '未知标题';
-                    DebugLogger.log('AutoPlay', `找到下一个可播放视频: ${nextVideoTitle}`, nextVideo);
 
+                // 检查是否为视频项且未完成
+                if (nextVideo.classList.contains('item-blpma') &&
+                    !nextVideo.querySelector('.finished-PsNX9')) {
+
+                    const nextVideoTitle = nextVideo.querySelector('.lessontitle-G206y')?.textContent || '未知标题';
+                    DebugLogger.log('AutoPlay', '找到下一个可播放视频: ' + nextVideoTitle, nextVideo);
+
+                    // 触发点击事件
                     const clickEvent = new MouseEvent('click', {
                         bubbles: true,
                         cancelable: true,
                         view: window
                     });
                     nextVideo.dispatchEvent(clickEvent);
-                    DebugLogger.log('AutoPlay', `已自动切换到下一个视频: ${nextVideoTitle}`);
+                    DebugLogger.log('AutoPlay', '已自动切换到下一个视频: ' + nextVideoTitle);
 
+                    // 视频切换后更新科目信息
                     if (SubjectInfo && typeof SubjectInfo.checkCurrentSubject === 'function') {
                         DebugLogger.debug('AutoPlay', '调用SubjectInfo.checkCurrentSubject()更新科目信息');
                         SubjectInfo.checkCurrentSubject();
@@ -320,8 +328,8 @@ const AutoCheckPass = {
 
         this.intervalId = setInterval(() => {
             this.checkAndClick();
-        }, GlobalConfig.interval.checkPass);
-        DebugLogger.log('AutoCheckPass', `过检功能已开启，检查间隔：${GlobalConfig.interval.checkPass}ms`);
+        }, Config.checkPassInterval);
+        DebugLogger.log('AutoCheckPass', '过检功能已开启，检查间隔：' + Config.checkPassInterval + 'ms');
     },
 
     stop() {
@@ -337,13 +345,16 @@ const AutoCheckPass = {
     checkAndClick() {
         try {
             DebugLogger.debug('AutoCheckPass', '开始检查是否有过检按钮');
-            
+
+            // 查找"点击通过检查"按钮
             const checkButton = document.querySelector('span.btn-DOCWn');
+
             if (checkButton) {
                 const buttonText = checkButton.textContent.trim();
-                DebugLogger.debug('AutoCheckPass', `找到过检按钮，文本：${buttonText}`, checkButton);
-                
+                DebugLogger.debug('AutoCheckPass', '找到过检按钮，文本：' + buttonText, checkButton);
+
                 if (buttonText === '点击通过检查') {
+                    // 防止重复点击
                     if (checkButton.dataset.checkClicked) {
                         DebugLogger.debug('AutoCheckPass', '过检按钮已标记为已点击，跳过本次操作');
                         return;
@@ -365,7 +376,7 @@ const AutoCheckPass = {
                         DebugLogger.debug('AutoCheckPass', '清除过检按钮点击标记');
                     }, 3000);
                 } else {
-                    DebugLogger.debug('AutoCheckPass', `按钮文本不是"点击通过检查"，跳过：${buttonText}`);
+                    DebugLogger.debug('AutoCheckPass', '按钮文本不是"点击通过检查"，跳过：' + buttonText);
                 }
             } else {
                 DebugLogger.debug('AutoCheckPass', '未找到过检按钮');
@@ -399,10 +410,11 @@ const SpeedControl = {
             return;
         }
 
+        // 定期检查是否保持目标速度
         this.intervalId = setInterval(() => {
             this.ensureSpeed();
-        }, GlobalConfig.interval.speedCheck);
-        DebugLogger.log('SpeedControl', `2倍速已开启，检查间隔：${GlobalConfig.interval.speedCheck}ms`);
+        }, Config.speedCheckInterval);
+        DebugLogger.log('SpeedControl', '2倍速已开启，检查间隔：' + Config.speedCheckInterval + 'ms');
     },
 
     stop() {
@@ -416,7 +428,7 @@ const SpeedControl = {
     },
 
     setSpeed(speed) {
-        DebugLogger.debug('SpeedControl', `设置目标倍速：${speed}`);
+        DebugLogger.debug('SpeedControl', '设置目标倍速：' + speed);
         this.targetSpeed = speed;
         this.ensureSpeed();
     },
@@ -424,7 +436,8 @@ const SpeedControl = {
     ensureSpeed() {
         try {
             DebugLogger.debug('SpeedControl', `检查当前倍速是否为${this.targetSpeed}`);
-            
+
+            // 查找倍速菜单中的对应选项
             const speedItems = document.querySelectorAll('.vjs-menu-content .vjs-menu-item');
             DebugLogger.debug('SpeedControl', `找到倍速选项数量：${speedItems.length}`);
 
@@ -438,6 +451,7 @@ const SpeedControl = {
 
                 if (speedText === this.targetSpeed) {
                     foundTargetSpeed = true;
+                    // 检查当前是否已选中
                     if (!item.classList.contains('vjs-selected')) {
                         const clickEvent = new MouseEvent('click', {
                             bubbles: true,
@@ -466,14 +480,17 @@ const SpeedControl = {
  * 刷课模式控制模块
  */
 const CourseBrushMode = {
+    // 开启刷课模式 - 打开所有功能
     enable() {
         DebugLogger.log('CourseBrushMode', '开始开启刷课模式');
-        
+
+        // 启用所有功能
         GUI.setToggleState('autoSkip', true);
         GUI.setToggleState('autoPlay', true);
         GUI.setToggleState('autoCheckPass', true);
         GUI.setToggleState('speedControl', true);
 
+        // 同步更新各个模块状态
         AutoSkip.toggle(true);
         AutoPlay.toggle(true);
         AutoCheckPass.toggle(true);
@@ -482,14 +499,17 @@ const CourseBrushMode = {
         DebugLogger.log('CourseBrushMode', '刷课模式已完全开启');
     },
 
+    // 关闭刷课模式 - 关闭所有功能
     disable() {
         DebugLogger.log('CourseBrushMode', '开始关闭刷课模式');
-        
+
+        // 禁用所有功能
         GUI.setToggleState('autoSkip', false);
         GUI.setToggleState('autoPlay', false);
         GUI.setToggleState('autoCheckPass', false);
         GUI.setToggleState('speedControl', false);
 
+        // 同步更新各个模块状态
         AutoSkip.toggle(false);
         AutoPlay.toggle(false);
         AutoCheckPass.toggle(false);
@@ -498,6 +518,7 @@ const CourseBrushMode = {
         DebugLogger.log('CourseBrushMode', '刷课模式已完全关闭');
     },
 
+    // 切换刷课模式状态
     toggle(isEnabled) {
         if (isEnabled) {
             this.enable();
@@ -517,7 +538,7 @@ const GUI = {
         autoPlay: false,
         autoCheckPass: false,
         speedControl: false,
-        courseBrushMode: false
+        courseBrushMode: false // 刷课模式状态
     },
 
     init() {
@@ -607,6 +628,7 @@ const GUI = {
                 font-weight: bold;
             }
 
+            /* 开关样式 */
             .ewt-switch {
                 position: relative;
                 display: inline-block;
@@ -652,6 +674,7 @@ const GUI = {
                 transform: translateX(16px);
             }
 
+            /* 响应式调整 */
             @media (max-width: 768px) {
                 .ewt-menu-panel {
                     width: 220px;
@@ -679,7 +702,7 @@ const GUI = {
         button.title = '升学E网通助手';
 
         button.addEventListener('click', () => {
-            DebugLogger.debug('GUI', `菜单按钮被点击，当前状态：${this.isMenuOpen ? '打开' : '关闭'}`);
+            DebugLogger.debug('GUI', '菜单按钮被点击，当前状态：' + (this.isMenuOpen ? '打开' : '关闭'));
             this.toggleMenu();
         });
 
@@ -693,6 +716,7 @@ const GUI = {
         const panel = document.createElement('div');
         panel.className = 'ewt-menu-panel';
 
+        // 标题
         const title = document.createElement('div');
         title.className = 'ewt-menu-title';
         title.textContent = '升学E网通助手';
@@ -726,12 +750,12 @@ const GUI = {
             (isChecked) => SpeedControl.toggle(isChecked)
         ));
 
-        // 刷课模式开关
+        // 刷课模式toggle开关
         panel.appendChild(this.createToggleItem(
             'courseBrushMode',
             '刷课模式',
             (isChecked) => CourseBrushMode.toggle(isChecked),
-            true
+            true // 标记为刷课模式，用于特殊样式
         ));
 
         document.querySelector('.ewt-helper-container').appendChild(panel);
@@ -763,6 +787,7 @@ const GUI = {
         item.appendChild(label);
         item.appendChild(switchContainer);
 
+        // 添加事件监听
         input.addEventListener('change', (e) => {
             DebugLogger.debug('GUI', `Toggle项 ${id} 状态变更：${e.target.checked}`);
             this.state[id] = e.target.checked;
@@ -790,17 +815,21 @@ const GUI = {
         this.state[id] = isChecked;
         const input = document.getElementById(`ewt-toggle-${id}`);
         if (input) {
+            // 移除事件监听器防止循环触发
             const clone = input.cloneNode(true);
             input.parentNode.replaceChild(clone, input);
             DebugLogger.debug('GUI', `克隆Toggle输入框以移除旧事件监听器：${id}`);
 
+            // 设置状态
             clone.checked = isChecked;
             DebugLogger.debug('GUI', `设置Toggle输入框状态：${id} = ${isChecked}`);
 
+            // 重新添加事件监听器
             clone.addEventListener('change', (e) => {
                 DebugLogger.debug('GUI', `Toggle项 ${id} 克隆后的状态变更：${e.target.checked}`);
                 this.state[id] = e.target.checked;
 
+                // 根据不同id调用相应的toggle方法
                 switch(id) {
                     case 'autoSkip':
                         AutoSkip.toggle(e.target.checked);
@@ -831,13 +860,13 @@ const GUI = {
 (function() {
     'use strict';
 
+    // 等待页面加载完成
     window.addEventListener('load', () => {
-        DebugLogger.log('Main', `升学E网通助手已加载 (v2.1.0)，Debug模式：${GlobalConfig.enableDebugMode ? '开启' : '关闭'}`);
+        DebugLogger.log('Main', '升学E网通助手已加载 (v2.3.0)');
         GUI.init();
-        // 可选：在控制台暴露DebugLogger，支持运行时切换Debug模式
-        window.EWTDebug = DebugLogger;
     });
 
+    // 额外的调试信息：DOMContentLoaded完成
     document.addEventListener('DOMContentLoaded', () => {
         DebugLogger.debug('Main', 'DOMContentLoaded 已完成，页面DOM结构加载完毕');
     });
