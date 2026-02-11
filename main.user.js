@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         升学E网通助手 v2 Lite
 // @namespace    https://github.com/ZNink/EWT360-Helper
-// @version      2.1.0
+// @version      2.2.0
 // @description  用于帮助学生通过升学E网通更好学习知识(雾)
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @match        http://teacher.ewt360.com/ewtbend/bend/index/index.html*
@@ -538,15 +538,56 @@ const GUI = {
         autoPlay: false,
         autoCheckPass: false,
         speedControl: false,
-        courseBrushMode: false // 刷课模式状态
+        courseBrushMode: false, // 刷课模式状态
+        hasShownGuide: false    // 是否已显示过新手引导
     },
 
     init() {
         DebugLogger.log('GUI', '开始初始化GUI界面');
+        this.loadConfig();
         this.createStyles();
         this.createMenuButton();
         this.createMenuPanel();
+        this.restoreModuleStates();
+        this.createGuideOverlay();
         DebugLogger.log('GUI', 'GUI界面初始化完成');
+    },
+
+    loadConfig() {
+        try {
+            const config = localStorage.getItem('ewt_helper_config');
+            if (config) {
+                const parsed = JSON.parse(config);
+                this.state = { ...this.state, ...parsed };
+                DebugLogger.log('GUI', '已读取本地配置', this.state);
+            }
+        } catch (e) {
+            DebugLogger.error('GUI', '读取本地配置失败', e);
+        }
+    },
+
+    saveConfig() {
+        try {
+            localStorage.setItem('ewt_helper_config', JSON.stringify(this.state));
+            DebugLogger.debug('GUI', '配置已保存到本地');
+        } catch (e) {
+            DebugLogger.error('GUI', '保存本地配置失败', e);
+        }
+    },
+
+    restoreModuleStates() {
+        DebugLogger.log('GUI', '正在恢复模块状态...');
+        // 如果刷课模式开启，直接开启刷课模式即可，它会处理所有子项
+        if (this.state.courseBrushMode) {
+             CourseBrushMode.toggle(true);
+             return;
+        }
+
+        // 否则逐个恢复
+        if (this.state.autoSkip) AutoSkip.toggle(true);
+        if (this.state.autoPlay) AutoPlay.toggle(true);
+        if (this.state.autoCheckPass) AutoCheckPass.toggle(true);
+        if (this.state.speedControl) SpeedControl.toggle(true);
     },
 
     createStyles() {
@@ -686,6 +727,48 @@ const GUI = {
                     font-size: 20px;
                 }
             }
+
+            /* 新手引导遮罩 */
+            .ewt-guide-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.7);
+                z-index: 99998; /* 比按钮(99999)低一层，保证按钮可点击 */
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                pointer-events: auto; /* 拦截点击，强制用户点击右下角 */
+            }
+
+            .ewt-guide-text {
+                color: white;
+                font-size: 24px;
+                font-weight: bold;
+                margin-bottom: 20px;
+                text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+                text-align: center;
+                line-height: 1.5;
+            }
+
+            .ewt-guide-arrow {
+                position: fixed;
+                bottom: 80px;
+                right: 80px;
+                color: white;
+                font-size: 60px;
+                font-weight: bold;
+                animation: ewt-bounce 1.5s infinite;
+                transform: rotate(45deg);
+            }
+
+            @keyframes ewt-bounce {
+                0%, 100% { transform: translate(0, 0) rotate(45deg); }
+                50% { transform: translate(15px, 15px) rotate(45deg); }
+            }
         `;
         document.head.appendChild(style);
         DebugLogger.debug('GUI', 'GUI样式创建完成并添加到页面');
@@ -709,6 +792,27 @@ const GUI = {
         container.appendChild(button);
         document.body.appendChild(container);
         DebugLogger.debug('GUI', '菜单按钮创建完成并添加到页面');
+    },
+
+    createGuideOverlay() {
+        if (this.state.hasShownGuide) return;
+
+        DebugLogger.debug('GUI', '创建首次使用引导遮罩');
+        const overlay = document.createElement('div');
+        overlay.className = 'ewt-guide-overlay';
+        
+        const text = document.createElement('div');
+        text.className = 'ewt-guide-text';
+        text.innerHTML = '欢迎使用升学E网通助手！<br>请点击右下角绿色图标打开控制面板';
+        
+        const arrow = document.createElement('div');
+        arrow.className = 'ewt-guide-arrow';
+        arrow.textContent = '👉'; // 使用简单的 Unicode 箭头，配合 CSS 旋转
+        
+        overlay.appendChild(text);
+        overlay.appendChild(arrow);
+        document.body.appendChild(overlay);
+        this.guideOverlay = overlay;
     },
 
     createMenuPanel() {
@@ -777,6 +881,7 @@ const GUI = {
         const input = document.createElement('input');
         input.type = 'checkbox';
         input.id = `ewt-toggle-${id}`;
+        input.checked = this.state[id] || false;
 
         const slider = document.createElement('span');
         slider.className = 'ewt-slider';
@@ -791,6 +896,7 @@ const GUI = {
         input.addEventListener('change', (e) => {
             DebugLogger.debug('GUI', `Toggle项 ${id} 状态变更：${e.target.checked}`);
             this.state[id] = e.target.checked;
+            this.saveConfig();
             onChange(e.target.checked);
         });
 
@@ -804,6 +910,15 @@ const GUI = {
         if (this.isMenuOpen) {
             panel.classList.add('open');
             DebugLogger.log('GUI', '菜单面板已打开');
+
+            // 如果存在引导遮罩，则移除并保存状态
+            if (this.guideOverlay) {
+                this.guideOverlay.remove();
+                this.guideOverlay = null;
+                this.state.hasShownGuide = true;
+                this.saveConfig();
+                DebugLogger.log('GUI', '首次引导结束，已移除遮罩并保存状态');
+            }
         } else {
             panel.classList.remove('open');
             DebugLogger.log('GUI', '菜单面板已关闭');
@@ -813,6 +928,7 @@ const GUI = {
     setToggleState(id, isChecked) {
         DebugLogger.debug('GUI', `设置Toggle项 ${id} 状态：${isChecked}`);
         this.state[id] = isChecked;
+        this.saveConfig();
         const input = document.getElementById(`ewt-toggle-${id}`);
         if (input) {
             // 移除事件监听器防止循环触发
@@ -828,6 +944,7 @@ const GUI = {
             clone.addEventListener('change', (e) => {
                 DebugLogger.debug('GUI', `Toggle项 ${id} 克隆后的状态变更：${e.target.checked}`);
                 this.state[id] = e.target.checked;
+                this.saveConfig();
 
                 // 根据不同id调用相应的toggle方法
                 switch(id) {
@@ -862,7 +979,7 @@ const GUI = {
 
     // 等待页面加载完成
     window.addEventListener('load', () => {
-        DebugLogger.log('Main', '升学E网通助手已加载 (v2.3.0)');
+        DebugLogger.log('Main', '升学E网通助手已加载 (v2.2.0)');
         GUI.init();
     });
 
