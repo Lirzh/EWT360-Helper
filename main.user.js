@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         升学E网通助手 v2 Lite
 // @namespace    https://github.com/ZNink/EWT360-Helper
-// @version      2.3.0
+// @version      2.3.1
 // @description  用于帮助学生通过升学E网通更好学习知识(雾)
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @match        http://teacher.ewt360.com/ewtbend/bend/index/index.html*
-// @author       ZNink
+// @match        https://web.ewt360.com/site-study/*
+// @match        http://web.ewt360.com/site-study/*
+// @author       ZNink，Linrzh
 // @icon         https://www.ewt360.com/favicon.ico
 // @grant        none
 // @updateURL    https://raw.githubusercontent.com/ZNink/EWT360-Helper/main/main.user.js
@@ -88,51 +90,35 @@ const AutoSkip = {
         }
     },
 
+    // 简化后的 checkAndSkip 函数
     checkAndSkip() {
         try {
-            DebugLogger.debug('AutoSkip', '开始检查是否有可跳过的题目');
-            const skipTexts = ['跳过', '跳题', '跳过题目', '暂不回答', '以后再说', '跳过本题'];
-            let targetButton = null;
+            // 定义要查找的跳过文本
+            const skipText = '跳过';
+            // 第一步：通过选择器查找包含跳过文本的按钮
+            let targetButton = Array.from(document.querySelectorAll('button, a, span.btn, div.btn')).find(
+                btn => btn.textContent.trim() === skipText
+            );
 
-            skipTexts.some(text => {
-                DebugLogger.debug('AutoSkip', `查找包含文本"${text}"的按钮`);
-                const buttons = document.querySelectorAll('button, a, span.btn, div.btn');
-                DebugLogger.debug('AutoSkip', `找到按钮总数：${buttons.length}`);
+            // 第二步：如果没找到，用XPath兜底查找
+            if (!targetButton) {
+                const xpathResult = document.evaluate(
+                    `//*[text()="${skipText}"]`, 
+                    document, 
+                    null, 
+                    XPathResult.FIRST_ORDERED_NODE_TYPE, 
+                    null
+                );
+                targetButton = xpathResult.singleNodeValue;
+            }
 
-                for (const btn of buttons) {
-                    if (btn.textContent.trim() === text) {
-                        targetButton = btn;
-                        DebugLogger.debug('AutoSkip', `找到目标按钮`, btn);
-                        return true;
-                    }
-                }
-
-                if (!targetButton) {
-                    const xpathResult = document.evaluate(
-                        `//*[text()="${text}"]`, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null
-                    );
-                    const element = xpathResult.singleNodeValue;
-                    if (element) {
-                        targetButton = element;
-                        DebugLogger.debug('AutoSkip', `通过XPath找到目标元素`, element);
-                        return true;
-                    }
-                }
-                return false;
-            });
-
-            if (targetButton) {
-                if (targetButton.dataset.skipClicked) {
-                    DebugLogger.debug('AutoSkip', '按钮已点击，跳过');
-                    return;
-                }
+            // 第三步：找到按钮且未点击过，则执行点击
+            if (targetButton && !targetButton.dataset.skipClicked) {
                 targetButton.dataset.skipClicked = 'true';
-                targetButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                targetButton.click(); // 简化事件触发方式
                 DebugLogger.log('AutoSkip', '已自动跳过题目');
-
+                // 5秒后清除标记，允许再次点击
                 setTimeout(() => delete targetButton.dataset.skipClicked, 5000);
-            } else {
-                DebugLogger.debug('AutoSkip', '未找到可跳过按钮');
             }
         } catch (error) {
             DebugLogger.error('AutoSkip', '自动跳题出错', error);
