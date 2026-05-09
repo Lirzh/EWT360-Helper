@@ -304,10 +304,12 @@ const CourseBrushMode = {
         GUI.setToggleState('autoPlay', true);
         GUI.setToggleState('autoCheckPass', true);
         GUI.setToggleState('speedControl', true);
+        GUI.setToggleState('lockProgress', true);
         AutoSkip.toggle(true);
         AutoPlay.toggle(true);
         AutoCheckPass.toggle(true);
         SpeedControl.toggle(true);
+        ProgressLock.toggle(true);
         DebugLogger.log('CourseBrushMode', '刷课模式已开启');
     },
     disable() {
@@ -315,14 +317,56 @@ const CourseBrushMode = {
         GUI.setToggleState('autoPlay', false);
         GUI.setToggleState('autoCheckPass', false);
         GUI.setToggleState('speedControl', false);
+        GUI.setToggleState('lockProgress', false);
         AutoSkip.toggle(false);
         AutoPlay.toggle(false);
         AutoCheckPass.toggle(false);
         SpeedControl.toggle(false);
+        ProgressLock.toggle(false);
         DebugLogger.log('CourseBrushMode', '刷课模式已关闭');
     },
     toggle(isEnabled) {
         isEnabled ? this.enable() : this.disable();
+    }
+};
+
+/**
+ * 进度条锁定功能
+ */
+const ProgressLock = {
+    enabled: false,
+    timer: null,
+
+    toggle(isEnabled) {
+        this.enabled = isEnabled;
+        if (isEnabled) {
+            this.start();
+        } else {
+            this.stop();
+        }
+        GUI.updateToggleState('lockProgress', isEnabled);
+        DebugLogger.log('ProgressLock', `进度条锁定已${isEnabled ? '开启' : '关闭'}`);
+    },
+
+    start() {
+        const lockProgress = () => {
+            const progressElements = document.querySelectorAll('[class*="progress"], [class*="prgs"]');
+            progressElements.forEach(el => {
+                el.style.pointerEvents = 'none';
+                el.style.cursor = 'not-allowed';
+            });
+        };
+        lockProgress();
+        this.timer = setInterval(lockProgress, 200);
+    },
+
+    stop() {
+        clearInterval(this.timer);
+        const progressElements = document.querySelectorAll('[class*="progress"], [class*="prgs"]');
+        progressElements.forEach(el => {
+            el.style.pointerEvents = 'auto';
+            el.style.cursor = 'default';
+        });
     }
 };
 
@@ -448,6 +492,7 @@ const GUI = {
         panel.appendChild(this.createToggleItem('autoPlay', '自动连播', v => AutoPlay.toggle(v)));
         panel.appendChild(this.createToggleItem('autoCheckPass', '自动过检', v => AutoCheckPass.toggle(v)));
         panel.appendChild(this.createToggleItem('speedControl', '2倍速播放', v => SpeedControl.toggle(v)));
+        panel.appendChild(this.createToggleItem('lockProgress', '锁定进度条', v => ProgressLock.toggle(v)));
         panel.appendChild(this.createToggleItem('courseBrushMode', '刷课模式', v => CourseBrushMode.toggle(v), true));
         document.querySelector('.ewt-helper-container').appendChild(panel);
     },
