@@ -586,6 +586,85 @@ const GUI = {
     }
 };
 
+//Bypass isTrusted test
+(function () {
+  "use strict";
+  const originalAddEventListener = EventTarget.prototype.addEventListener;
+  const originalRemoveEventListener = EventTarget.prototype.removeEventListener;
+  const wrappedListenersMap = new WeakMap();
+  EventTarget.prototype.addEventListener = function (type, listener, options) {
+    if (
+      typeof listener !== "function" ||
+      type !== "click" ||
+      !String(listener).includes("isTrusted")
+    ) {
+      return originalAddEventListener.call(this, type, listener, options);
+    }
+    console.log(
+      "[isTrusted Bypass] 获取到疑似检测isTrusted的click事件，其函数为：",
+      listener,
+    );
+    let wrappedListener = wrappedListenersMap.get(listener);
+
+    if (!wrappedListener) {
+      wrappedListener = function (event) {
+        if (event && typeof event === "object" && "isTrusted" in event) {
+          const eventProxy = new Proxy(event, {
+            get(target, prop) {
+              if (prop === "isTrusted") {
+                if (
+                  target.isTrusted === false &&
+                  (target.type === "click" ||
+                    target.type === "submit" ||
+                    target.type === "change")
+                ) {
+                  console.log(
+                    `[篡改] 将 ${target.type} 事件的 isTrusted 从 false 改为 true`,
+                  );
+                  return true;
+                }
+                return target.isTrusted;
+              }
+              const value = target[prop];
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+          return listener.call(this, eventProxy);
+        }
+        return listener.call(this, event);
+      };
+      wrappedListenersMap.set(listener, wrappedListener);
+      wrappedListenersMap.set(wrappedListener, listener);
+    }
+
+    // 调用原始 addEventListener，注册包装后的函数
+    return originalAddEventListener.call(this, type, wrappedListener, options);
+  };
+
+  // 重写 removeEventListener，确保能正确移除
+  EventTarget.prototype.removeEventListener = function (
+    type,
+    listener,
+    options,
+  ) {
+    if (typeof listener === "function") {
+      // 查找是否有对应的包装函数
+      const wrappedListener = wrappedListenersMap.get(listener);
+      if (wrappedListener) {
+        return originalRemoveEventListener.call(
+          this,
+          type,
+          wrappedListener,
+          options,
+        );
+      }
+    }
+    return originalRemoveEventListener.call(this, type, listener, options);
+  };
+
+  console.log("[isTrusted Bypass] addEventListener 劫持已启动");
+})();
+
 (function() {
     'use strict';
     let retry = 0;
