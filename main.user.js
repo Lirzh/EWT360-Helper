@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         升学E网通助手 v2 Lite
 // @namespace    https://github.com/ZNink/EWT360-Helper
-// @version      2.5.0
+// @version      3.0.0
 // @description  用于帮助学生通过升学E网通更好学习知识(雾)
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @match        http://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @match        https://web.ewt360.com/site-study/*
 // @match        http://web.ewt360.com/site-study/*
-// @author       ZNink，Linrzh，L#peace
+// @author       ZNink，Linrzh，L#peace，lizzzhh
 // @icon         https://www.ewt360.com/favicon.ico
 // @grant        none
 // @updateURL    https://raw.githubusercontent.com/ZNink/EWT360-Helper/main/main.user.js
@@ -102,6 +102,7 @@ const AutoSkip = {
             );
 
             if (!targetButton) {
+                DebugLogger.debug('AutoSkip', '未找到"跳过"按钮，尝试XPath...');
                 const xpathResult = document.evaluate(
                     `//*[text()="${skipText}"]`, 
                     document, 
@@ -112,12 +113,18 @@ const AutoSkip = {
                 targetButton = xpathResult.singleNodeValue;
             }
 
-            if (targetButton && !targetButton.dataset.skipClicked) {
-                targetButton.dataset.skipClicked = 'true';
-                targetButton.click();
-                DebugLogger.log('AutoSkip', '已自动跳过题目');
-                setTimeout(() => delete targetButton.dataset.skipClicked, 5000);
+            if (!targetButton) {
+                DebugLogger.debug('AutoSkip', '当前无题目可跳过');
+                return;
             }
+            if (targetButton.dataset.skipClicked) {
+                DebugLogger.debug('AutoSkip', '"跳过"按钮已点击过，冷却中');
+                return;
+            }
+            targetButton.dataset.skipClicked = 'true';
+            targetButton.click();
+            DebugLogger.log('AutoSkip', '已自动跳过题目');
+            setTimeout(() => delete targetButton.dataset.skipClicked, 5000);
         } catch (error) {
             DebugLogger.error('AutoSkip', '自动跳题出错', error);
         }
@@ -125,7 +132,7 @@ const AutoSkip = {
 };
 
 /**
- * 自动连播模块（已修改：看完连播 = 检测进度图片）
+ * 自动连播模块（进度检测连播）
  */
 const AutoPlay = {
     intervalId: null,
@@ -157,42 +164,60 @@ const AutoPlay = {
         this.currentMode = mode;
         if (mode === Config.playMode.PROGRESS_85) {
             this.progressThreshold = 0.85;
+        } else {
+            this.progressThreshold = 0.99;
         }
-        DebugLogger.log('AutoPlay', `连播模式已切换：${mode === Config.playMode.PROGRESS_85 ? '85%进度' : '检测图片看完后'}`);
+        DebugLogger.log('AutoPlay', `连播模式已切换：${mode === Config.playMode.PROGRESS_85 ? '85%进度' : '100%进度'}`);
     },
 
     checkAndSwitch() {
         try {
             const videoListContainer = document.querySelector('.listCon-zrsBh');
-            const activeVideo = videoListContainer?.querySelector('.item-blpma.active-EI2Hl');
-            if (!videoListContainer || !activeVideo) return;
-
-            let canPlayNext = false;
-
-            if (this.currentMode === Config.playMode.PROGRESS_85) {
-                const video = document.querySelector('video');
-                if (!video) return;
-                const current = video.currentTime;
-                const total = video.duration;
-                if (isNaN(total) || total <= 0) return;
-                canPlayNext = current / total >= this.progressThreshold;
-            } else {
-                const img = document.querySelector('img.progress-img-vkUYM[src="//file.ewt360.com/file/1820894120067424424"]');
-                canPlayNext = !!img;
-                if (img) DebugLogger.log('AutoPlay', '检测到已看完图片，准备连播');
+            if (!videoListContainer) {
+                DebugLogger.debug('AutoPlay', '未找到视频列表容器');
+                return;
             }
+
+            const allVideos = videoListContainer.querySelectorAll('.item-blpma');
+            const activeVideo = videoListContainer.querySelector('.item-blpma.active-EI2Hl');
+            
+            DebugLogger.debug('AutoPlay', `视频列表共${allVideos.length}项，当前激活: ${activeVideo ? '是' : '否'}`);
+            
+            if (!activeVideo) return;
+
+            const video = document.querySelector('video');
+            if (!video) {
+                DebugLogger.debug('AutoPlay', '未找到视频元素');
+                return;
+            }
+            const current = video.currentTime;
+            const total = video.duration;
+            if (isNaN(total) || total <= 0) {
+                DebugLogger.debug('AutoPlay', `时长无效(当前:${current}s, 总时长:${total}s)，等待...`);
+                return;
+            }
+            const pct = (current / total * 100).toFixed(1);
+            const need = this.progressThreshold * 100;
+            DebugLogger.debug('AutoPlay', `进度检查: ${current.toFixed(1)}s / ${total.toFixed(1)}s = ${pct}% (阈值:${need}%)`);
+            const canPlayNext = current / total >= this.progressThreshold;
 
             if (!canPlayNext) return;
 
-            let nextVideo = activeVideo.nextElementSibling;
-            while (nextVideo) {
-                if (nextVideo.classList.contains('item-blpma') && !nextVideo.querySelector('.finished-PsNX9')) {
-                    nextVideo.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                    DebugLogger.log('AutoPlay', '已自动切换下一个视频');
-                    break;
-                }
-                nextVideo = nextVideo.nextElementSibling;
+            const activeIndex = Array.from(allVideos).findIndex(el => el.classList.contains('active-EI2Hl'));
+            if (activeIndex < 0) {
+                DebugLogger.debug('AutoPlay', '未找到当前激活视频的索引');
+                return;
             }
+            DebugLogger.debug('AutoPlay', `当前索引: ${activeIndex}, 总数量: ${allVideos.length}`);
+
+            if (activeIndex + 1 >= allVideos.length) {
+                DebugLogger.debug('AutoPlay', '已是最后一个视频，无需切换');
+                return;
+            }
+
+            const nextVideo = allVideos[activeIndex + 1];
+            nextVideo.click();
+            DebugLogger.log('AutoPlay', `已自动切换到第 ${activeIndex + 2} 个视频`);
         } catch (error) {
             DebugLogger.error('AutoPlay', '自动连播出错', error);
         }
@@ -229,13 +254,21 @@ const AutoCheckPass = {
     checkAndClick() {
         try {
             const checkButton = document.querySelector('span.btn-DOCWn');
-            if (checkButton && checkButton.textContent.trim() === '点击通过检查') {
-                if (checkButton.dataset.checkClicked) return;
-                checkButton.dataset.checkClicked = 'true';
-                checkButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                DebugLogger.log('AutoCheckPass', '已自动通过检查');
-                setTimeout(() => delete checkButton.dataset.checkClicked, 3000);
+            if (!checkButton) {
+                DebugLogger.debug('AutoCheckPass', '未找到过检按钮，跳过本轮');
+                return;
             }
+            const text = checkButton.textContent.trim();
+            DebugLogger.debug('AutoCheckPass', `按钮内容: "${text}", 已点击: ${!!checkButton.dataset.checkClicked}`);
+            if (text !== '点击通过检查') return;
+            if (checkButton.dataset.checkClicked) {
+                DebugLogger.debug('AutoCheckPass', '按钮已点击过，冷却中');
+                return;
+            }
+            checkButton.dataset.checkClicked = 'true';
+            checkButton.click();
+            DebugLogger.log('AutoCheckPass', '已自动通过检查');
+            setTimeout(() => delete checkButton.dataset.checkClicked, 3000);
         } catch (error) {
             DebugLogger.error('AutoCheckPass', '过检出错', error);
         }
@@ -281,14 +314,21 @@ const SpeedControl = {
     ensureSpeed() {
         try {
             const speedItems = document.querySelectorAll('.vjs-menu-content .vjs-menu-item');
+            let matched = null;
             for (const item of speedItems) {
                 const t = item.querySelector('.vjs-menu-item-text')?.textContent.trim();
-                if (t === this.targetSpeed && !item.classList.contains('vjs-selected')) {
-                    item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                    DebugLogger.log('SpeedControl', `已设为${this.targetSpeed}`);
-                    break;
-                }
+                if (t === this.targetSpeed) { matched = item; break; }
             }
+            if (!matched) {
+                DebugLogger.debug('SpeedControl', `未找到目标倍速选项(${this.targetSpeed})，可用: ${Array.from(speedItems).map(i => i.querySelector('.vjs-menu-item-text')?.textContent.trim()).filter(Boolean).join(', ')}`);
+                return;
+            }
+            if (matched.classList.contains('vjs-selected')) {
+                DebugLogger.debug('SpeedControl', `当前已是${this.targetSpeed}，无需设置`);
+                return;
+            }
+            matched.click();
+            DebugLogger.log('SpeedControl', `已设为${this.targetSpeed}`);
         } catch (error) {
             DebugLogger.error('SpeedControl', '倍速出错', error);
         }
@@ -519,7 +559,7 @@ const GUI = {
 
         const btnFull = document.createElement('button');
         btnFull.className = `ewt-playmode-btn ${this.state.playMode === Config.playMode.FULL_PLAY ? 'active' : ''}`;
-        btnFull.textContent = '看完后连播';
+        btnFull.textContent = '100%进度连播';
         btnFull.onclick = () => {
             this.state.playMode = Config.playMode.FULL_PLAY;
             AutoPlay.updatePlayMode(Config.playMode.FULL_PLAY);
@@ -588,81 +628,78 @@ const GUI = {
 
 //Bypass isTrusted test
 (function () {
-  "use strict";
-  const originalAddEventListener = EventTarget.prototype.addEventListener;
-  const originalRemoveEventListener = EventTarget.prototype.removeEventListener;
-  const wrappedListenersMap = new WeakMap();
-  EventTarget.prototype.addEventListener = function (type, listener, options) {
-    if (
-      typeof listener !== "function" ||
-      type !== "click" ||
-      !String(listener).includes("isTrusted")
-    ) {
-      return originalAddEventListener.call(this, type, listener, options);
-    }
-    console.log(
-      "[isTrusted Bypass] 获取到疑似检测isTrusted的click事件，其函数为：",
-      listener,
-    );
-    let wrappedListener = wrappedListenersMap.get(listener);
-
-    if (!wrappedListener) {
-      wrappedListener = function (event) {
-        if (event && typeof event === "object" && "isTrusted" in event) {
-          const eventProxy = new Proxy(event, {
-            get(target, prop) {
-              if (prop === "isTrusted") {
-                if (
-                  target.isTrusted === false &&
-                  (target.type === "click" ||
-                    target.type === "submit" ||
-                    target.type === "change")
-                ) {
-                  console.log(
-                    `[篡改] 将 ${target.type} 事件的 isTrusted 从 false 改为 true`,
-                  );
-                  return true;
-                }
-                return target.isTrusted;
-              }
-              const value = target[prop];
-              return typeof value === "function" ? value.bind(target) : value;
-            },
-          });
-          return listener.call(this, eventProxy);
+    "use strict";
+    const originalAddEventListener = EventTarget.prototype.addEventListener;
+    const originalRemoveEventListener = EventTarget.prototype.removeEventListener;
+    const wrappedListenersMap = new WeakMap();
+    EventTarget.prototype.addEventListener = function (type, listener, options) {
+        if (
+            typeof listener !== "function" ||
+            type !== "click" ||
+            !String(listener).includes("isTrusted")
+        ) {
+            return originalAddEventListener.call(this, type, listener, options);
         }
-        return listener.call(this, event);
-      };
-      wrappedListenersMap.set(listener, wrappedListener);
-      wrappedListenersMap.set(wrappedListener, listener);
-    }
-
-    // 调用原始 addEventListener，注册包装后的函数
-    return originalAddEventListener.call(this, type, wrappedListener, options);
-  };
-
-  // 重写 removeEventListener，确保能正确移除
-  EventTarget.prototype.removeEventListener = function (
-    type,
-    listener,
-    options,
-  ) {
-    if (typeof listener === "function") {
-      // 查找是否有对应的包装函数
-      const wrappedListener = wrappedListenersMap.get(listener);
-      if (wrappedListener) {
-        return originalRemoveEventListener.call(
-          this,
-          type,
-          wrappedListener,
-          options,
+        console.log(
+            "[isTrusted Bypass] 获取到疑似检测isTrusted的click事件，其函数为：",
+            listener,
         );
-      }
-    }
-    return originalRemoveEventListener.call(this, type, listener, options);
-  };
+        let wrappedListener = wrappedListenersMap.get(listener);
 
-  console.log("[isTrusted Bypass] addEventListener 劫持已启动");
+        if (!wrappedListener) {
+            wrappedListener = function (event) {
+                if (event && typeof event === "object" && "isTrusted" in event) {
+                    const eventProxy = new Proxy(event, {
+                        get(target, prop) {
+                            if (prop === "isTrusted") {
+                                if (
+                                    target.isTrusted === false &&
+                                    (target.type === "click" ||
+                                        target.type === "submit" ||
+                                        target.type === "change")
+                                ) {
+                                    console.log(
+                                        `[篡改] 将 ${target.type} 事件的 isTrusted 从 false 改为 true`,
+                                    );
+                                    return true;
+                                }
+                                return target.isTrusted;
+                            }
+                            const value = target[prop];
+                            return typeof value === "function" ? value.bind(target) : value;
+                        },
+                    });
+                    return listener.call(this, eventProxy);
+                }
+                return listener.call(this, event);
+            };
+            wrappedListenersMap.set(listener, wrappedListener);
+            wrappedListenersMap.set(wrappedListener, listener);
+        }
+
+        return originalAddEventListener.call(this, type, wrappedListener, options);
+    };
+
+    EventTarget.prototype.removeEventListener = function (
+        type,
+        listener,
+        options,
+    ) {
+        if (typeof listener === "function") {
+            const wrappedListener = wrappedListenersMap.get(listener);
+            if (wrappedListener) {
+                return originalRemoveEventListener.call(
+                    this,
+                    type,
+                    wrappedListener,
+                    options,
+                );
+            }
+        }
+        return originalRemoveEventListener.call(this, type, listener, options);
+    };
+
+    console.log("[isTrusted Bypass] addEventListener 劫持已启动");
 })();
 
 (function() {
