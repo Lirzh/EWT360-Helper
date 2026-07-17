@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         升学E网通助手 v2 Lite
 // @namespace    https://github.com/ZNink/EWT360-Helper
-// @version      3.0.0
+// @version      3.1.0
 // @description  用于帮助学生通过升学E网通更好学习知识(雾)
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @match        http://teacher.ewt360.com/ewtbend/bend/index/index.html*
@@ -104,10 +104,10 @@ const AutoSkip = {
             if (!targetButton) {
                 DebugLogger.debug('AutoSkip', '未找到"跳过"按钮，尝试XPath...');
                 const xpathResult = document.evaluate(
-                    `//*[text()="${skipText}"]`, 
-                    document, 
-                    null, 
-                    XPathResult.FIRST_ORDERED_NODE_TYPE, 
+                    `//*[text()="${skipText}"]`,
+                    document,
+                    null,
+                    XPathResult.FIRST_ORDERED_NODE_TYPE,
                     null
                 );
                 targetButton = xpathResult.singleNodeValue;
@@ -165,7 +165,7 @@ const AutoPlay = {
         if (mode === Config.playMode.PROGRESS_85) {
             this.progressThreshold = 0.85;
         } else {
-            this.progressThreshold = 0.99;
+            this.progressThreshold = 2;
         }
         DebugLogger.log('AutoPlay', `连播模式已切换：${mode === Config.playMode.PROGRESS_85 ? '85%进度' : '100%进度'}`);
     },
@@ -180,9 +180,9 @@ const AutoPlay = {
 
             const allVideos = videoListContainer.querySelectorAll('.item-blpma');
             const activeVideo = videoListContainer.querySelector('.item-blpma.active-EI2Hl');
-            
+
             DebugLogger.debug('AutoPlay', `视频列表共${allVideos.length}项，当前激活: ${activeVideo ? '是' : '否'}`);
-            
+
             if (!activeVideo) return;
 
             const video = document.querySelector('video');
@@ -196,10 +196,18 @@ const AutoPlay = {
                 DebugLogger.debug('AutoPlay', `时长无效(当前:${current}s, 总时长:${total}s)，等待...`);
                 return;
             }
-            const pct = (current / total * 100).toFixed(1);
-            const need = this.progressThreshold * 100;
-            DebugLogger.debug('AutoPlay', `进度检查: ${current.toFixed(1)}s / ${total.toFixed(1)}s = ${pct}% (阈值:${need}%)`);
-            const canPlayNext = current / total >= this.progressThreshold;
+
+            let canPlayNext = false;
+            if (this.currentMode === Config.playMode.PROGRESS_85) {
+                const pct = (current / total * 100).toFixed(1);
+                const need = this.progressThreshold * 100;
+                DebugLogger.debug('AutoPlay', `进度检查: ${current.toFixed(1)}s / ${total.toFixed(1)}s = ${pct}% (阈值:${need}%)`);
+                canPlayNext = current / total >= this.progressThreshold;
+            } else {
+                const remaining = (total - current).toFixed(1);
+                DebugLogger.debug('AutoPlay', `剩余时间检查: 当前${current.toFixed(1)}s / 总${total.toFixed(1)}s，剩余${remaining}s (阈值:${this.progressThreshold}s)`);
+                canPlayNext = total - current <= this.progressThreshold;
+            }
 
             if (!canPlayNext) return;
 
