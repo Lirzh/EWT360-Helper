@@ -85,7 +85,7 @@
 
 我们非常感谢所有为项目做出贡献的开发者 / AI（排名不分先后）：
 
-[ZNink](https://github.com/ZNink) 、[Lirzh](https://github.com/lirzh)、[wesrin2000](https://github.com/wesrin2000)
+[ZNink](https://github.com/ZNink) 、[Lirzh](https://github.com/lirzh)、[wesrin2000](https://github.com/wesrin2000)、[lizzzhh](https://github.com/lizzzhh)
 
 [Kimi](https://www.kimi.com) 和 [豆包AI](https://doubao.com)
 
