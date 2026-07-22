@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         升学E网通助手 v2 Lite
+// @name         升学E网通助手 v3 Lite
 // @namespace    https://github.com/ZNink/EWT360-Helper
-// @version      3.1.0
+// @version      3.2.0
 // @description  用于帮助学生通过升学E网通更好学习知识(雾)
 // @match        https://teacher.ewt360.com/ewtbend/bend/index/index.html*
 // @match        http://teacher.ewt360.com/ewtbend/bend/index/index.html*
@@ -21,33 +21,20 @@
 const DebugLogger = {
     enabled: false,
 
-    getTimestamp() {
-        const now = new Date();
-        return `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}]`;
-    },
-
     log(module, message, data = null) {
-        if (!this.enabled) return;
-        const logMsg = `${this.getTimestamp()} [${module}] [INFO] ${message}`;
+        const logMsg = `[${new Date().toISOString().slice(11, 23)}] [${module}] [INFO] ${message}`;
         data ? console.log(logMsg, data) : console.log(logMsg);
-    },
-
-    warn(module, message, data = null) {
-        if (!this.enabled) return;
-        const logMsg = `${this.getTimestamp()} [${module}] [WARN] ${message}`;
-        data ? console.warn(logMsg, data) : console.warn(logMsg);
-    },
-
-    error(module, message, error = null) {
-        if (!this.enabled) return;
-        const logMsg = `${this.getTimestamp()} [${module}] [ERROR] ${message}`;
-        error ? console.error(logMsg, error) : console.error(logMsg);
     },
 
     debug(module, message, data = null) {
         if (!this.enabled) return;
-        const logMsg = `${this.getTimestamp()} [${module}] [DEBUG] ${message}`;
+        const logMsg = `[${new Date().toISOString().slice(11, 23)}] [${module}] [DEBUG] ${message}`;
         data ? console.debug(logMsg, data) : console.debug(logMsg);
+    },
+
+    error(module, message, error = null) {
+        const logMsg = `[${new Date().toISOString().slice(11, 23)}] [${module}] [ERROR] ${message}`;
+        error ? console.error(logMsg, error) : console.error(logMsg);
     },
 };
 
@@ -104,10 +91,10 @@ const AutoSkip = {
             if (!targetButton) {
                 DebugLogger.debug('AutoSkip', '未找到"跳过"按钮，尝试XPath...');
                 const xpathResult = document.evaluate(
-                    `//*[text()="${skipText}"]`,
-                    document,
-                    null,
-                    XPathResult.FIRST_ORDERED_NODE_TYPE,
+                    `//*[text()="${skipText}"]`, 
+                    document, 
+                    null, 
+                    XPathResult.FIRST_ORDERED_NODE_TYPE, 
                     null
                 );
                 targetButton = xpathResult.singleNodeValue;
@@ -164,8 +151,6 @@ const AutoPlay = {
         this.currentMode = mode;
         if (mode === Config.playMode.PROGRESS_85) {
             this.progressThreshold = 0.85;
-        } else {
-            this.progressThreshold = 2;
         }
         DebugLogger.log('AutoPlay', `连播模式已切换：${mode === Config.playMode.PROGRESS_85 ? '85%进度' : '100%进度'}`);
     },
@@ -178,11 +163,11 @@ const AutoPlay = {
                 return;
             }
 
-            const allVideos = videoListContainer.querySelectorAll('.item-blpma');
+            const allVideos = Array.from(videoListContainer.querySelectorAll('.item-blpma'));
             const activeVideo = videoListContainer.querySelector('.item-blpma.active-EI2Hl');
-
+            
             DebugLogger.debug('AutoPlay', `视频列表共${allVideos.length}项，当前激活: ${activeVideo ? '是' : '否'}`);
-
+            
             if (!activeVideo) return;
 
             const video = document.querySelector('video');
@@ -196,22 +181,20 @@ const AutoPlay = {
                 DebugLogger.debug('AutoPlay', `时长无效(当前:${current}s, 总时长:${total}s)，等待...`);
                 return;
             }
-
-            let canPlayNext = false;
+            let canPlayNext;
             if (this.currentMode === Config.playMode.PROGRESS_85) {
                 const pct = (current / total * 100).toFixed(1);
                 const need = this.progressThreshold * 100;
                 DebugLogger.debug('AutoPlay', `进度检查: ${current.toFixed(1)}s / ${total.toFixed(1)}s = ${pct}% (阈值:${need}%)`);
                 canPlayNext = current / total >= this.progressThreshold;
             } else {
-                const remaining = (total - current).toFixed(1);
-                DebugLogger.debug('AutoPlay', `剩余时间检查: 当前${current.toFixed(1)}s / 总${total.toFixed(1)}s，剩余${remaining}s (阈值:${this.progressThreshold}s)`);
-                canPlayNext = total - current <= this.progressThreshold;
+                DebugLogger.debug('AutoPlay', `完成检查: ${current.toFixed(1)}s / ${total.toFixed(1)}s (差${(total - current).toFixed(1)}s)`);
+                canPlayNext = total - current <= 2;
             }
 
             if (!canPlayNext) return;
 
-            const activeIndex = Array.from(allVideos).findIndex(el => el.classList.contains('active-EI2Hl'));
+            const activeIndex = allVideos.findIndex(el => el.classList.contains('active-EI2Hl'));
             if (activeIndex < 0) {
                 DebugLogger.debug('AutoPlay', '未找到当前激活视频的索引');
                 return;
@@ -383,7 +366,6 @@ const CourseBrushMode = {
  */
 const ProgressLock = {
     enabled: false,
-    timer: null,
 
     toggle(isEnabled) {
         this.enabled = isEnabled;
@@ -392,29 +374,21 @@ const ProgressLock = {
         } else {
             this.stop();
         }
-        GUI.updateToggleState('lockProgress', isEnabled);
+        GUI.setToggleState('lockProgress', isEnabled);
         DebugLogger.log('ProgressLock', `进度条锁定已${isEnabled ? '开启' : '关闭'}`);
     },
 
     start() {
-        const lockProgress = () => {
-            const progressElements = document.querySelectorAll('[class*="progress"], [class*="prgs"]');
-            progressElements.forEach(el => {
-                el.style.pointerEvents = 'none';
-                el.style.cursor = 'not-allowed';
-            });
-        };
-        lockProgress();
-        this.timer = setInterval(lockProgress, 200);
+        if (document.getElementById('ewt-progress-lock-style')) return;
+        const style = document.createElement('style');
+        style.id = 'ewt-progress-lock-style';
+        style.textContent = '[class*="progress"],[class*="prgs"]{pointer-events:none!important;cursor:not-allowed!important;}';
+        document.head.appendChild(style);
     },
 
     stop() {
-        clearInterval(this.timer);
-        const progressElements = document.querySelectorAll('[class*="progress"], [class*="prgs"]');
-        progressElements.forEach(el => {
-            el.style.pointerEvents = 'auto';
-            el.style.cursor = 'default';
-        });
+        const style = document.getElementById('ewt-progress-lock-style');
+        style?.remove();
     }
 };
 
@@ -430,11 +404,13 @@ const GUI = {
         speedControl: false,
         courseBrushMode: false,
         hasShownGuide: false,
-        playMode: Config.playMode.PROGRESS_85
+        playMode: Config.playMode.PROGRESS_85,
+        debug: false
     },
 
     init() {
         this.loadConfig();
+        DebugLogger.enabled = this.state.debug;
         this.createStyles();
         this.createMenuButton();
         this.createMenuPanel();
@@ -542,6 +518,11 @@ const GUI = {
         panel.appendChild(this.createToggleItem('speedControl', '2倍速播放', v => SpeedControl.toggle(v)));
         panel.appendChild(this.createToggleItem('lockProgress', '锁定进度条', v => ProgressLock.toggle(v)));
         panel.appendChild(this.createToggleItem('courseBrushMode', '刷课模式', v => CourseBrushMode.toggle(v), true));
+        panel.appendChild(this.createToggleItem('debug', '详细日志', v => {
+            DebugLogger.enabled = v;
+            this.state.debug = v;
+            this.saveConfig();
+        }));
         document.querySelector('.ewt-helper-container').appendChild(panel);
     },
 
@@ -723,8 +704,7 @@ const GUI = {
     }
     if (document.readyState === 'complete' || document.readyState === 'interactive') init();
     else document.addEventListener('DOMContentLoaded', init);
-    window.addEventListener('load', init);
-    new MutationObserver((m, o) => {
-        if (document.body && !document.querySelector('.ewt-helper-container')) { init(); o.disconnect(); }
+    new MutationObserver((m, obs) => {
+        if (document.body && !document.querySelector('.ewt-helper-container')) { init(); obs.disconnect(); }
     }).observe(document.documentElement, { childList: true, subtree: true });
 })();
